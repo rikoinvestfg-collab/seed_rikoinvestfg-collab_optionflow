@@ -2,14 +2,25 @@
 // OptionFlow Key Levels — by rikoinvestfg
 // Gamma Flip | Max Pain | Call Wall | Put Wall
 // Alertas inteligentes de confluencia alcista/bajista
-// Data auto-updated every 5 min from OptionFlow Dashboard
-// Compatible: TradingView Premium (request.seed required)
+// Data from OptionFlow Dashboard — update inputs from dashboard
+// Compatible: TradingView Premium — ANY timeframe
 // ============================================================
 //@version=6
 indicator(title="OptionFlow Key Levels", shorttitle="OFL", overlay=true, max_lines_count=10, max_labels_count=50)
 
 // ─────────────────────────────────────────────
-// INPUTS
+// INPUTS — Key Levels (actualizar desde el dashboard)
+// ─────────────────────────────────────────────
+// Abre el dashboard, copia los niveles de tu ticker y pegalos aqui.
+// Estos valores se actualizan automaticamente por el dashboard cada 5 min.
+
+gamma_flip_val = input.float(0, "Gamma Flip",  group="🔑 Key Levels — Copiar del Dashboard", tooltip="Nivel Gamma Flip del dashboard")
+max_pain_val   = input.float(0, "Max Pain",    group="🔑 Key Levels — Copiar del Dashboard", tooltip="Nivel Max Pain del dashboard")
+call_wall_val  = input.float(0, "Call Wall",   group="🔑 Key Levels — Copiar del Dashboard", tooltip="Nivel Call Wall del dashboard")
+put_wall_val   = input.float(0, "Put Wall",    group="🔑 Key Levels — Copiar del Dashboard", tooltip="Nivel Put Wall del dashboard")
+
+// ─────────────────────────────────────────────
+// INPUTS — Visual
 // ─────────────────────────────────────────────
 show_gamma_flip  = input.bool(true,  "Mostrar Gamma Flip",  group="Niveles")
 show_max_pain    = input.bool(true,  "Mostrar Max Pain",    group="Niveles")
@@ -26,21 +37,14 @@ line_style_input = input.string("solid", "Estilo de Linea", options=["solid","da
 conf_pct         = input.float(0.3, "Proximidad a nivel (%)", minval=0.05, maxval=2.0, step=0.05, group="Confluencia")
 
 // ─────────────────────────────────────────────
-// LEER DATA DESDE PINE SEEDS (GitHub)
+// CONVERT INPUTS TO SERIES (na if 0)
 // ─────────────────────────────────────────────
-// Repo: seed_rikoinvestfg-collab_optionflow
-// CSV format: YYYYMMDDT,open,high,low,close,volume
-// Mapping: open=GammaFlip, high=MaxPain, low=PutWall, close=CallWall
-//
-// TradingView symbol: SEED_RIKOINVESTFG_COLLAB_OPTIONFLOW:TSLA
-// ─────────────────────────────────────────────
+gamma_flip = gamma_flip_val > 0 ? gamma_flip_val : na
+max_pain   = max_pain_val   > 0 ? max_pain_val   : na
+call_wall  = call_wall_val  > 0 ? call_wall_val  : na
+put_wall   = put_wall_val   > 0 ? put_wall_val   : na
 
 sym = syminfo.ticker
-
-gamma_flip = request.seed("seed_rikoinvestfg-collab_optionflow", sym, open)
-max_pain   = request.seed("seed_rikoinvestfg-collab_optionflow", sym, high)
-put_wall   = request.seed("seed_rikoinvestfg-collab_optionflow", sym, low)
-call_wall  = request.seed("seed_rikoinvestfg-collab_optionflow", sym, close)
 
 // ─────────────────────────────────────────────
 // LOGICA DE CONFLUENCIA
@@ -100,19 +104,19 @@ if barstate.islast
 
     if show_gamma_flip and not na(gamma_flip)
         ln_gf := line.new(bar_start, gamma_flip, bar_index + 20, gamma_flip, color=col_gamma_flip, width=line_width, style=line_style, extend=extend.right)
-        label.new(bar_index + 5, gamma_flip, "Gamma Flip: " + str.tostring(gamma_flip, "#.##"), color=color.new(col_gamma_flip, 85), textcolor=col_gamma_flip, style=label.style_label_left, size=size.small)
+        label.new(bar_index + 5, gamma_flip, "GF " + str.tostring(gamma_flip, "#.##"), color=color.new(col_gamma_flip, 85), textcolor=col_gamma_flip, style=label.style_label_left, size=size.small)
 
     if show_max_pain and not na(max_pain)
         ln_mp := line.new(bar_start, max_pain, bar_index + 20, max_pain, color=col_max_pain, width=line_width, style=line_style, extend=extend.right)
-        label.new(bar_index + 5, max_pain, "Max Pain: " + str.tostring(max_pain, "#.##"), color=color.new(col_max_pain, 85), textcolor=col_max_pain, style=label.style_label_left, size=size.small)
+        label.new(bar_index + 5, max_pain, "MP " + str.tostring(max_pain, "#.##"), color=color.new(col_max_pain, 85), textcolor=col_max_pain, style=label.style_label_left, size=size.small)
 
     if show_call_wall and not na(call_wall)
         ln_cw := line.new(bar_start, call_wall, bar_index + 20, call_wall, color=col_call_wall, width=line_width, style=line_style, extend=extend.right)
-        label.new(bar_index + 5, call_wall, "Call Wall: " + str.tostring(call_wall, "#.##"), color=color.new(col_call_wall, 85), textcolor=col_call_wall, style=label.style_label_left, size=size.small)
+        label.new(bar_index + 5, call_wall, "CW " + str.tostring(call_wall, "#.##"), color=color.new(col_call_wall, 85), textcolor=col_call_wall, style=label.style_label_left, size=size.small)
 
     if show_put_wall and not na(put_wall)
         ln_pw := line.new(bar_start, put_wall, bar_index + 20, put_wall, color=col_put_wall, width=line_width, style=line_style, extend=extend.right)
-        label.new(bar_index + 5, put_wall, "Put Wall: " + str.tostring(put_wall, "#.##"), color=color.new(col_put_wall, 85), textcolor=col_put_wall, style=label.style_label_left, size=size.small)
+        label.new(bar_index + 5, put_wall, "PW " + str.tostring(put_wall, "#.##"), color=color.new(col_put_wall, 85), textcolor=col_put_wall, style=label.style_label_left, size=size.small)
 
 // ─────────────────────────────────────────────
 // TABLA
