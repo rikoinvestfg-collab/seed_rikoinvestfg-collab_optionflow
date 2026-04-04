@@ -36,7 +36,6 @@ import {
   BookOpen,
   Crosshair,
   AlertTriangle,
-  Globe,
   Sun,
   Moon,
 } from "lucide-react";
@@ -125,7 +124,7 @@ export default function ChartPage() {
   const [chartDte, setChartDte] = useState<DteMode>("0DTE");
   const [showEM, setShowEM] = useState(true);
   const [sessionType, setSessionType] = useState<"RTH" | "ETH">("RTH");
-  const [showWorldMonitor, setShowWorldMonitor] = useState(false);
+
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -616,19 +615,6 @@ export default function ChartPage() {
           </button>
         </div>
 
-        <div className="w-px h-3.5 bg-[rgba(255,255,255,0.08)]" />
-
-        {/* World Monitor */}
-        <button
-          onClick={() => setShowWorldMonitor(true)}
-          className="flex items-center gap-1 px-1.5 py-1 text-[10px] rounded text-[#6B7280] hover:text-[#58A6FF] hover:bg-[rgba(88,166,255,0.08)] transition-all"
-          data-testid="world-monitor-btn"
-          title="World Monitor — Real-Time Global Markets"
-        >
-          <Globe size={11} />
-          <span className="hidden sm:inline">Monitor</span>
-        </button>
-
         {/* Copy TradingView export */}
         <button
           onClick={handleCopyExport}
@@ -815,50 +801,7 @@ export default function ChartPage() {
           </div>
         </div>
 
-        {/* ── World Monitor overlay ── */}
-        {showWorldMonitor && (
-          <div className="absolute inset-0 z-30 flex flex-col bg-[#0A0E14]" data-testid="world-monitor-overlay">
-            {/* Header */}
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-[rgba(255,255,255,0.08)] bg-[#0D1117]">
-              <div className="flex items-center gap-2">
-                <Globe size={12} className="text-[#58A6FF]" />
-                <span className="text-[11px] font-bold text-white tracking-wide">WORLD MONITOR</span>
-                <span className="text-[8px] text-[#3B4252]">Real-Time Global Markets & Trading Dashboard</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <a
-                  href="https://finance.worldmonitor.app/?lat=20.0000&lon=0.0000&zoom=1.00&view=global&timeRange=7d&layers=cables%2Cpipelines%2Csanctions%2Cweather%2Ceconomic%2Cwaterways%2Coutages%2Cnatural%2CtradeRoutes"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 px-2 py-0.5 text-[9px] text-[#58A6FF] hover:bg-[rgba(88,166,255,0.1)] rounded transition-all"
-                  data-testid="world-monitor-external"
-                >
-                  <Globe size={9} />
-                  Abrir externo
-                </a>
-                <button
-                  onClick={() => setShowWorldMonitor(false)}
-                  className="text-[#6B7280] hover:text-white transition-colors p-1 rounded hover:bg-white/5"
-                  data-testid="close-world-monitor"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            </div>
-            {/* Iframe */}
-            <div className="flex-1 relative">
-              <iframe
-                src="https://finance.worldmonitor.app/?lat=20.0000&lon=0.0000&zoom=1.00&view=global&timeRange=7d&layers=cables%2Cpipelines%2Csanctions%2Cweather%2Ceconomic%2Cwaterways%2Coutages%2Cnatural%2CtradeRoutes"
-                className="absolute inset-0 w-full h-full border-0"
-                title="World Monitor"
-                allow="geolocation"
-                loading="lazy"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* ── Legend / Guide overlay ── */}
+                {/* ── Legend / Guide overlay ── */}
         {showLegend && (
           <div className="absolute inset-0 z-20 flex" data-testid="legend-overlay">
             {/* Backdrop */}
