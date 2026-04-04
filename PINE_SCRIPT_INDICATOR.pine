@@ -1,0 +1,301 @@
+// ============================================================
+// OptionFlow Key Levels v3.1 — by rikoinvestfg
+// Gamma Flip | Max Pain | Call Wall | Put Wall
+// Alertas inteligentes de confluencia alcista/bajista
+// Data from OptionFlow Dashboard
+// METODO 1: Automatico via input.text_area (pega del dashboard)
+// METODO 2: Manual via input.float (un ticker a la vez)
+// Compatible: TradingView Premium — ANY timeframe
+// Lines: Horizontal Ray con labels
+// ============================================================
+//@version=6
+indicator(title="OptionFlow Key Levels v3.1", shorttitle="OFL v3.1", overlay=true, max_labels_count=50, max_lines_count=20)
+
+// ─────────────────────────────────────────────
+// METODO 1: BULK DATA — Copia del Dashboard (automatico)
+// ─────────────────────────────────────────────
+// Formato: SYMBOL|GF|MP|CW|PW;SYMBOL|GF|MP|CW|PW;...
+// Ejemplo: SPY|555.2|550|560|545;TSLA|280.5|275|290|265
+// Click "Pine Script" en el dashboard Live Chart y pega aqui.
+
+use_bulk = input.bool(true, "Usar Bulk Data (automatico)", group="📋 Bulk Data — Copiar del Dashboard", tooltip="Activa para usar datos bulk del dashboard. Desactiva para usar inputs manuales.")
+bulk_data = input.text_area("", "Bulk Data", group="📋 Bulk Data — Copiar del Dashboard", tooltip="Pega aqui el string copiado del dashboard (boton Pine Script)")
+
+// ─────────────────────────────────────────────
+// METODO 2: INPUTS MANUALES (un ticker a la vez)
+// ─────────────────────────────────────────────
+gamma_flip_val = input.float(0, "Gamma Flip",  group="🔑 Key Levels — Manual", tooltip="Nivel Gamma Flip del dashboard")
+max_pain_val   = input.float(0, "Max Pain",    group="🔑 Key Levels — Manual", tooltip="Nivel Max Pain del dashboard")
+call_wall_val  = input.float(0, "Call Wall",   group="🔑 Key Levels — Manual", tooltip="Nivel Call Wall del dashboard")
+put_wall_val   = input.float(0, "Put Wall",    group="🔑 Key Levels — Manual", tooltip="Nivel Put Wall del dashboard")
+
+// ─────────────────────────────────────────────
+// INPUTS — Visual
+// ─────────────────────────────────────────────
+show_gamma_flip  = input.bool(true,  "Mostrar Gamma Flip",  group="Niveles")
+show_max_pain    = input.bool(true,  "Mostrar Max Pain",    group="Niveles")
+show_call_wall   = input.bool(true,  "Mostrar Call Wall",   group="Niveles")
+show_put_wall    = input.bool(true,  "Mostrar Put Wall",    group="Niveles")
+show_signals     = input.bool(true,  "Mostrar Señales",     group="Señales", tooltip="Muestra flechas de confluencia y señales en el chart")
+show_table       = input.bool(true,  "Mostrar Tabla",       group="Tabla")
+table_position   = input.string("top_right", "Posicion Tabla", options=["top_right","top_left","bottom_right","bottom_left"], group="Tabla")
+col_gamma_flip   = input.color(color.new(#FF9800, 0), "Color Gamma Flip", group="Colores")
+col_max_pain     = input.color(color.new(#E91E63, 0), "Color Max Pain",   group="Colores")
+col_call_wall    = input.color(color.new(#00BCD4, 0), "Color Call Wall",  group="Colores")
+col_put_wall     = input.color(color.new(#F44336, 0), "Color Put Wall",   group="Colores")
+conf_pct         = input.float(0.3, "Proximidad a nivel (%)", minval=0.05, maxval=2.0, step=0.05, group="Confluencia")
+
+// ─────────────────────────────────────────────
+// PARSE BULK DATA — encuentra el ticker actual
+// ─────────────────────────────────────────────
+sym = syminfo.ticker
+
+// Parse bulk data to find current ticker levels
+parseBulkGF() =>
+    if not use_bulk or str.length(bulk_data) == 0
+        0.0
+    else
+        float result = 0.0
+        search = sym + "|"
+        pos = str.pos(bulk_data, search)
+        if not na(pos) and pos >= 0
+            after = str.substring(bulk_data, pos + str.length(search))
+            pipe1 = str.pos(after, "|")
+            if not na(pipe1) and pipe1 > 0
+                gf_str = str.substring(after, 0, pipe1)
+                result := str.tonumber(gf_str)
+        result
+
+parseBulkMP() =>
+    if not use_bulk or str.length(bulk_data) == 0
+        0.0
+    else
+        float result = 0.0
+        search = sym + "|"
+        pos = str.pos(bulk_data, search)
+        if not na(pos) and pos >= 0
+            after = str.substring(bulk_data, pos + str.length(search))
+            pipe1 = str.pos(after, "|")
+            if not na(pipe1) and pipe1 > 0
+                rest1 = str.substring(after, pipe1 + 1)
+                pipe2 = str.pos(rest1, "|")
+                if not na(pipe2) and pipe2 > 0
+                    mp_str = str.substring(rest1, 0, pipe2)
+                    result := str.tonumber(mp_str)
+        result
+
+parseBulkCW() =>
+    if not use_bulk or str.length(bulk_data) == 0
+        0.0
+    else
+        float result = 0.0
+        search = sym + "|"
+        pos = str.pos(bulk_data, search)
+        if not na(pos) and pos >= 0
+            after = str.substring(bulk_data, pos + str.length(search))
+            pipe1 = str.pos(after, "|")
+            if not na(pipe1) and pipe1 > 0
+                rest1 = str.substring(after, pipe1 + 1)
+                pipe2 = str.pos(rest1, "|")
+                if not na(pipe2) and pipe2 > 0
+                    rest2 = str.substring(rest1, pipe2 + 1)
+                    pipe3 = str.pos(rest2, "|")
+                    if not na(pipe3) and pipe3 > 0
+                        cw_str = str.substring(rest2, 0, pipe3)
+                        result := str.tonumber(cw_str)
+        result
+
+parseBulkPW() =>
+    if not use_bulk or str.length(bulk_data) == 0
+        0.0
+    else
+        float result = 0.0
+        search = sym + "|"
+        pos = str.pos(bulk_data, search)
+        if not na(pos) and pos >= 0
+            after = str.substring(bulk_data, pos + str.length(search))
+            pipe1 = str.pos(after, "|")
+            if not na(pipe1) and pipe1 > 0
+                rest1 = str.substring(after, pipe1 + 1)
+                pipe2 = str.pos(rest1, "|")
+                if not na(pipe2) and pipe2 > 0
+                    rest2 = str.substring(rest1, pipe2 + 1)
+                    pipe3 = str.pos(rest2, "|")
+                    if not na(pipe3) and pipe3 > 0
+                        rest3 = str.substring(rest2, pipe3 + 1)
+                        semi = str.pos(rest3, ";")
+                        pw_str = not na(semi) and semi > 0 ? str.substring(rest3, 0, semi) : rest3
+                        result := str.tonumber(pw_str)
+        result
+
+// ─────────────────────────────────────────────
+// RESOLVE FINAL VALUES (bulk > manual > 0)
+// ─────────────────────────────────────────────
+bulk_gf = parseBulkGF()
+bulk_mp = parseBulkMP()
+bulk_cw = parseBulkCW()
+bulk_pw = parseBulkPW()
+
+final_gf = use_bulk and bulk_gf > 0 ? bulk_gf : gamma_flip_val
+final_mp = use_bulk and bulk_mp > 0 ? bulk_mp : max_pain_val
+final_cw = use_bulk and bulk_cw > 0 ? bulk_cw : call_wall_val
+final_pw = use_bulk and bulk_pw > 0 ? bulk_pw : put_wall_val
+
+gamma_flip = final_gf > 0 ? final_gf : na
+max_pain   = final_mp > 0 ? final_mp : na
+call_wall  = final_cw > 0 ? final_cw : na
+put_wall   = final_pw > 0 ? final_pw : na
+
+// ─────────────────────────────────────────────
+// LOGICA DE CONFLUENCIA
+// ─────────────────────────────────────────────
+pct = conf_pct / 100
+
+above_gamma     = not na(gamma_flip) and close > gamma_flip
+below_gamma     = not na(gamma_flip) and close < gamma_flip
+near_gamma_flip = not na(gamma_flip) and math.abs(close - gamma_flip) / gamma_flip <= pct
+near_put_wall   = not na(put_wall)   and math.abs(close - put_wall)   / put_wall   <= pct
+near_call_wall  = not na(call_wall)  and math.abs(close - call_wall)  / call_wall  <= pct
+
+bull_score = (above_gamma ? 1 : 0) + (near_put_wall and above_gamma ? 1 : 0) + (not na(max_pain) and close > max_pain ? 1 : 0) + (near_gamma_flip and above_gamma ? 1 : 0)
+bear_score = (below_gamma ? 1 : 0) + (near_call_wall and below_gamma ? 1 : 0) + (not na(max_pain) and close < max_pain ? 1 : 0) + (near_gamma_flip and below_gamma ? 1 : 0)
+
+bull_signal  = bull_score >= 3
+bear_signal  = bear_score >= 3
+// Edge-triggered: only fire on the FIRST bar where confluence activates
+bull_trigger = bull_signal and not bull_signal[1]
+bear_trigger = bear_signal and not bear_signal[1]
+
+// Gamma Flip crossovers — already edge-triggered by ta.cross*
+cross_above_gf  = ta.crossover(close,  gamma_flip)
+cross_below_gf  = ta.crossunder(close, gamma_flip)
+
+// Put Wall bounce / Call Wall rejection — EDGE TRIGGERED
+// Only fire when price ENTERS the zone for the first time (wasn't near before)
+was_near_pw = not na(put_wall) and math.abs(close[1] - put_wall) / put_wall <= pct
+was_near_cw = not na(call_wall) and math.abs(close[1] - call_wall) / call_wall <= pct
+
+bounce_put_wall  = near_put_wall and not was_near_pw and close > open and above_gamma
+reject_call_wall = near_call_wall and not was_near_cw and close < open and below_gamma
+
+// ─────────────────────────────────────────────
+// SEÑALES VISUALES — only when show_signals is enabled
+// ─────────────────────────────────────────────
+plotshape(show_signals and bull_trigger,    title="Confluencia Alcista",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.lime, 0), size=size.small,  text="BULL", textcolor=color.lime)
+plotshape(show_signals and bear_trigger,    title="Confluencia Bajista",  style=shape.triangledown, location=location.abovebar, color=color.new(color.red,  0), size=size.small,  text="BEAR", textcolor=color.red)
+plotshape(show_signals and cross_above_gf,  title="Cruce GF Arriba",      style=shape.circle,       location=location.belowbar, color=color.new(#FF9800,    0), size=size.tiny,   text="GF+",  textcolor=#FF9800)
+plotshape(show_signals and cross_below_gf,  title="Cruce GF Abajo",       style=shape.circle,       location=location.abovebar, color=color.new(#FF9800,    0), size=size.tiny,   text="GF-",  textcolor=#FF9800)
+plotshape(show_signals and bounce_put_wall, title="Rebote Put Wall",      style=shape.labelup,      location=location.belowbar, color=color.new(color.green,30), size=size.tiny, text="PW↑",  textcolor=color.white)
+plotshape(show_signals and reject_call_wall,title="Rechazo Call Wall",    style=shape.labeldown,    location=location.abovebar, color=color.new(color.blue, 30), size=size.tiny, text="CW↓",  textcolor=color.white)
+
+// ─────────────────────────────────────────────
+// HORIZONTAL RAY LINES — using line.new() with extend.right
+// Each level drawn as a ray from current bar extending right
+// with a label showing the level name and price
+// ─────────────────────────────────────────────
+
+// Persistent line and label variables
+var line line_gf = na
+var line line_mp = na
+var line line_cw = na
+var line line_pw = na
+var label lbl_gf = na
+var label lbl_mp = na
+var label lbl_cw = na
+var label lbl_pw = na
+
+if barstate.islast
+    // Clean up previous lines and labels
+    if not na(line_gf)
+        line.delete(line_gf)
+    if not na(line_mp)
+        line.delete(line_mp)
+    if not na(line_cw)
+        line.delete(line_cw)
+    if not na(line_pw)
+        line.delete(line_pw)
+    if not na(lbl_gf)
+        label.delete(lbl_gf)
+    if not na(lbl_mp)
+        label.delete(lbl_mp)
+    if not na(lbl_cw)
+        label.delete(lbl_cw)
+    if not na(lbl_pw)
+        label.delete(lbl_pw)
+
+    // Gamma Flip — Horizontal Ray + Label
+    if show_gamma_flip and not na(gamma_flip)
+        line_gf := line.new(bar_index, gamma_flip, bar_index + 1, gamma_flip, xloc.bar_index, extend.right, col_gamma_flip, line.style_solid, 2)
+        lbl_gf  := label.new(bar_index + 5, gamma_flip, "⚡ Gamma Flip  " + str.tostring(gamma_flip, "#.##"), xloc.bar_index, yloc.price, col_gamma_flip, label.style_label_left, color.white, size.small)
+
+    // Max Pain — Horizontal Ray + Label
+    if show_max_pain and not na(max_pain)
+        line_mp := line.new(bar_index, max_pain, bar_index + 1, max_pain, xloc.bar_index, extend.right, col_max_pain, line.style_dashed, 2)
+        lbl_mp  := label.new(bar_index + 5, max_pain, "🎯 Max Pain  " + str.tostring(max_pain, "#.##"), xloc.bar_index, yloc.price, col_max_pain, label.style_label_left, color.white, size.small)
+
+    // Call Wall — Horizontal Ray + Label
+    if show_call_wall and not na(call_wall)
+        line_cw := line.new(bar_index, call_wall, bar_index + 1, call_wall, xloc.bar_index, extend.right, col_call_wall, line.style_solid, 2)
+        lbl_cw  := label.new(bar_index + 5, call_wall, "🧱 Call Wall  " + str.tostring(call_wall, "#.##"), xloc.bar_index, yloc.price, col_call_wall, label.style_label_left, color.white, size.small)
+
+    // Put Wall — Horizontal Ray + Label
+    if show_put_wall and not na(put_wall)
+        line_pw := line.new(bar_index, put_wall, bar_index + 1, put_wall, xloc.bar_index, extend.right, col_put_wall, line.style_solid, 2)
+        lbl_pw  := label.new(bar_index + 5, put_wall, "🛡 Put Wall  " + str.tostring(put_wall, "#.##"), xloc.bar_index, yloc.price, col_put_wall, label.style_label_left, color.white, size.small)
+
+// ─────────────────────────────────────────────
+// TABLA — limpia y compacta (same dark style as dashboard)
+// ─────────────────────────────────────────────
+tbl_pos = table_position == "top_right" ? position.top_right : table_position == "top_left" ? position.top_left : table_position == "bottom_right" ? position.bottom_right : position.bottom_left
+
+var table tbl = na
+
+if barstate.islast and show_table
+    if not na(tbl)
+        table.delete(tbl)
+
+    tbl := table.new(tbl_pos, 2, 9, bgcolor=color.new(#0D1117, 10), border_color=color.new(#30363D, 0), border_width=1, frame_color=color.new(#30363D, 0), frame_width=1)
+
+    table.cell(tbl, 0, 0, "OptionFlow v3.1", text_color=color.white,            bgcolor=color.new(#161B22, 0), text_size=size.small, text_halign=text.align_center)
+    table.cell(tbl, 1, 0, sym,             text_color=color.new(#58A6FF, 0),  bgcolor=color.new(#161B22, 0), text_size=size.small, text_halign=text.align_right)
+    table.cell(tbl, 0, 1, "Gamma Flip",    text_color=color.new(#8B949E, 0),  bgcolor=color.new(#0D1117, 0), text_size=size.small)
+    table.cell(tbl, 1, 1, not na(gamma_flip) ? str.tostring(gamma_flip, "#.##") : "-", text_color=col_gamma_flip, bgcolor=color.new(#0D1117, 0), text_size=size.small, text_halign=text.align_right)
+    table.cell(tbl, 0, 2, "Max Pain",      text_color=color.new(#8B949E, 0),  bgcolor=color.new(#0D1117, 0), text_size=size.small)
+    table.cell(tbl, 1, 2, not na(max_pain)   ? str.tostring(max_pain,   "#.##") : "-", text_color=col_max_pain,   bgcolor=color.new(#0D1117, 0), text_size=size.small, text_halign=text.align_right)
+    table.cell(tbl, 0, 3, "Call Wall",     text_color=color.new(#8B949E, 0),  bgcolor=color.new(#0D1117, 0), text_size=size.small)
+    table.cell(tbl, 1, 3, not na(call_wall)  ? str.tostring(call_wall,  "#.##") : "-", text_color=col_call_wall,  bgcolor=color.new(#0D1117, 0), text_size=size.small, text_halign=text.align_right)
+    table.cell(tbl, 0, 4, "Put Wall",      text_color=color.new(#8B949E, 0),  bgcolor=color.new(#0D1117, 0), text_size=size.small)
+    table.cell(tbl, 1, 4, not na(put_wall)   ? str.tostring(put_wall,   "#.##") : "-", text_color=col_put_wall,   bgcolor=color.new(#0D1117, 0), text_size=size.small, text_halign=text.align_right)
+    table.cell(tbl, 0, 5, "---",           text_color=color.new(#30363D, 0),  bgcolor=color.new(#0D1117, 0), text_size=size.tiny)
+    table.cell(tbl, 1, 5, "---",           text_color=color.new(#30363D, 0),  bgcolor=color.new(#0D1117, 0), text_size=size.tiny)
+
+    bias_label = bull_signal ? "ALCISTA" : bear_signal ? "BAJISTA" : above_gamma ? "Neutral+" : "Neutral-"
+    bias_color = bull_signal ? color.lime : bear_signal ? color.red : above_gamma ? color.new(color.green, 40) : color.new(color.red, 40)
+    score_val  = bull_signal ? bull_score : bear_score
+
+    table.cell(tbl, 0, 6, "Bias",  text_color=color.new(#8B949E, 0), bgcolor=color.new(#0D1117, 0), text_size=size.small)
+    table.cell(tbl, 1, 6, bias_label, text_color=bias_color,         bgcolor=color.new(#0D1117, 0), text_size=size.small, text_halign=text.align_right)
+    table.cell(tbl, 0, 7, "Score", text_color=color.new(#8B949E, 0), bgcolor=color.new(#0D1117, 0), text_size=size.small)
+    table.cell(tbl, 1, 7, str.tostring(score_val) + "/4", text_color=bias_color, bgcolor=color.new(#0D1117, 0), text_size=size.small, text_halign=text.align_right)
+    
+    src_label = use_bulk and str.length(bulk_data) > 0 ? "BULK" : "MANUAL"
+    src_color = use_bulk and str.length(bulk_data) > 0 ? color.new(#58A6FF, 0) : color.new(#FF9800, 0)
+    table.cell(tbl, 0, 8, "Fuente", text_color=color.new(#8B949E, 0), bgcolor=color.new(#0D1117, 0), text_size=size.small)
+    table.cell(tbl, 1, 8, src_label, text_color=src_color, bgcolor=color.new(#0D1117, 0), text_size=size.small, text_halign=text.align_right)
+
+// ─────────────────────────────────────────────
+// FONDO SUTIL — zona gamma
+// ─────────────────────────────────────────────
+bg_color = not na(gamma_flip) and close > gamma_flip ? color.new(color.green, 96) : not na(gamma_flip) and close < gamma_flip ? color.new(color.red, 96) : na
+bgcolor(bg_color, title="Zona Gamma Flip")
+
+// ─────────────────────────────────────────────
+// ALERTAS
+// ─────────────────────────────────────────────
+alertcondition(bull_trigger,    "CONFLUENCIA ALCISTA",     "ALCISTA {{ticker}} a {{close}} — Confluencia bullish 3+ niveles activa")
+alertcondition(bear_trigger,    "CONFLUENCIA BAJISTA",     "BAJISTA {{ticker}} a {{close}} — Confluencia bearish 3+ niveles activa")
+alertcondition(cross_above_gf,  "Rompe Gamma Flip Arriba", "{{ticker}} ROMPE Gamma Flip al ALZA en {{close}} — Dealers compran dips")
+alertcondition(cross_below_gf,  "Rompe Gamma Flip Abajo",  "{{ticker}} ROMPE Gamma Flip a la BAJA en {{close}} — Dealers venden rallies")
+alertcondition(bounce_put_wall, "Rebote en Put Wall",      "{{ticker}} REBOTA en Put Wall en {{close}} — posible alza")
+alertcondition(reject_call_wall,"Rechazo en Call Wall",    "{{ticker}} RECHAZA en Call Wall en {{close}} — posible baja")
+alertcondition(ta.cross(close, max_pain), "Cruce Max Pain","{{ticker}} cruzo Max Pain en {{close}}")

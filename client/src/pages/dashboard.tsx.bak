@@ -1,0 +1,2232 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Activity,
+  Zap,
+  Shield,
+  Target,
+  ArrowUpCircle,
+  ArrowDownCircle,
+  Radio,
+  Clock,
+  BarChart3,
+  ChevronRight,
+  Search,
+  Calendar,
+  Globe,
+  RefreshCw,
+  Filter,
+  X,
+  Twitter,
+  ExternalLink,
+  Repeat2,
+  FileText,
+  TrendingUp as TrendUp,
+  Eye,
+  Layers,
+  Brain,
+} from "lucide-react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type Ticker = {
+  id: number;
+  symbol: string;
+  name: string;
+  price: number;
+  change: number;
+  changePercent: number;
+  marketCap: number | null;
+  volume: number | null;
+  dayLow: number | null;
+  dayHigh: number | null;
+  previousClose: number | null;
+  open: number | null;
+  pe: number | null;
+  eps: number | null;
+  gammaFlip: string | null;
+  maxPain: string | null;
+  callWall: string | null;
+  putWall: string | null;
+  gammaRegime: string | null;
+  atmIv: string | null;
+  netGex: string | null;
+};
+
+type News = {
+  id: number;
+  title: string;
+  summary: string | null;
+  source: string | null;
+  url: string | null;
+  relatedTicker: string | null;
+  timestamp: string;
+  sentiment: string | null;
+};
+
+type Earning = {
+  id: number;
+  symbol: string;
+  period: string;
+  date: string;
+  actualEps: number | null;
+  estimatedEps: number | null;
+  actualRevenue: number | null;
+  estimatedRevenue: number | null;
+  surprise: string | null;
+  isUpcoming: number | null;
+};
+
+type MacroEvent = {
+  id: number;
+  date: string;
+  time: string;
+  country: string;
+  event: string;
+  previous: string | null;
+  forecast: string | null;
+  actual: string | null;
+  importance: string;
+  notes: string | null;
+};
+
+type OptionsFlow = {
+  id: number;
+  symbol: string;
+  type: string;
+  strike: string | null;
+  expiry: string | null;
+  premium: string | null;
+  volume: string | null;
+  openInterest: string | null;
+  sentiment: string | null;
+  signal: string | null;
+  timestamp: string;
+  details: string | null;
+};
+
+type Tweet = {
+  username: string;
+  displayName: string;
+  text: string;
+  timestamp: string;
+  url: string;
+  isRetweet: boolean;
+};
+
+// Parsed volume field from OptionsFlow – enriched data
+type FlowVolumeData = {
+  optionContract?: string;
+  direction?: string;
+  contracts?: number;
+  notional?: number;
+  trades?: number;
+  time?: string;
+  durationMs?: number;
+  first?: number;
+  last?: number;
+  bid?: number;
+  ask?: number;
+  exchanges?: number;
+  confidence?: number;
+  callPut?: string;
+};
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
+
+function formatPrice(price: number | null): string {
+  if (price === null || price === undefined) return "—";
+  const p = Number(price);
+  if (isNaN(p)) return "—";
+  if (p >= 1000)
+    return p.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+  return p.toFixed(2);
+}
+
+function formatMarketCap(cap: number | null): string {
+  if (!cap) return "—";
+  if (cap >= 1e12) return `$${(cap / 1e12).toFixed(2)}T`;
+  if (cap >= 1e9) return `$${(cap / 1e9).toFixed(1)}B`;
+  if (cap >= 1e6) return `$${(cap / 1e6).toFixed(1)}M`;
+  return `$${cap.toLocaleString()}`;
+}
+
+function formatVolume(vol: number | null): string {
+  if (!vol) return "—";
+  if (vol >= 1e6) return `${(vol / 1e6).toFixed(1)}M`;
+  if (vol >= 1e3) return `${(vol / 1e3).toFixed(1)}K`;
+  return vol.toLocaleString();
+}
+
+function formatRevenue(rev: number | null): string {
+  if (!rev) return "—";
+  if (rev >= 1e12) return `$${(rev / 1e12).toFixed(1)}T`;
+  if (rev >= 1e9) return `$${(rev / 1e9).toFixed(1)}B`;
+  if (rev >= 1e6) return `$${(rev / 1e6).toFixed(0)}M`;
+  return `$${rev.toLocaleString()}`;
+}
+
+function formatNotional(n: number | null | undefined): string {
+  if (n == null) return "—";
+  const v = Number(n);
+  if (isNaN(v)) return "—";
+  if (v >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
+  return `$${v.toFixed(0)}`;
+}
+
+function timeAgo(timestamp: string): string {
+  if (/^\d+[mhd]\s+ago$/i.test(timestamp) || /just now/i.test(timestamp)) {
+    return timestamp;
+  }
+  const parsed = new Date(timestamp).getTime();
+  if (isNaN(parsed)) return timestamp;
+  const diff = Date.now() - parsed;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function daysUntil(dateStr: string): number {
+  const now = new Date();
+  const target = new Date(dateStr);
+  return Math.ceil(
+    (target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+  );
+}
+
+function formatDate(dateStr: string): string {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function parseFlowVolume(volumeStr: string | null): FlowVolumeData {
+  if (!volumeStr) return {};
+  try {
+    const raw = JSON.parse(volumeStr) as Record<string, unknown>;
+    // Normalize string number fields like "$0.11" to actual numbers
+    const numFields = ['first', 'last', 'bid', 'ask', 'notional', 'contracts', 'trades', 'durationMs', 'exchanges', 'confidence'];
+    for (const field of numFields) {
+      if (typeof raw[field] === 'string') {
+        const cleaned = (raw[field] as string).replace(/[$,K]/g, '');
+        const val = parseFloat(cleaned);
+        raw[field] = isNaN(val) ? undefined : val;
+      }
+    }
+    return raw as FlowVolumeData;
+  } catch {
+    return {};
+  }
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const STOCK_SYMBOLS = [
+  "TSLA","MSFT","NVDA","AAPL","AMD","NFLX","GOOG","AMZN","PLTR","AVGO","MU","META","ORCL",
+];
+const ETF_SYMBOLS = ["SPX","QQQ","DIA","IWM","SPY","SOXL","USO","SLV","GLD"];
+
+// ─── LiveClock ────────────────────────────────────────────────────────────────
+
+function LiveClock() {
+  const [time, setTime] = useState(new Date());
+  useEffect(() => {
+    const interval = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(interval);
+  }, []);
+  return (
+    <span className="tabular-nums text-xs text-muted-foreground">
+      {time.toLocaleTimeString("en-US", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })}{" "}
+      EDT
+    </span>
+  );
+}
+
+// ─── TickerRow ────────────────────────────────────────────────────────────────
+
+function TickerRow({
+  ticker,
+  isSelected,
+  onClick,
+}: {
+  ticker: Ticker;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  const chg = Number(ticker.change) || 0;
+  const chgPct = Number(ticker.changePercent) || 0;
+  const isPositive = chg >= 0;
+  const changeColor = isPositive ? "text-emerald-400" : "text-red-400";
+  const bgColor = isSelected
+    ? "bg-primary/10 border-primary/30"
+    : "border-transparent hover:bg-muted/50";
+
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-3 py-2.5 border rounded-lg transition-all duration-150 ${bgColor}`}
+      data-testid={`ticker-row-${ticker.symbol}`}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="flex flex-col">
+            <span className="text-sm font-semibold tracking-wide">
+              {ticker.symbol}
+            </span>
+            <span className="text-[10px] text-muted-foreground leading-tight truncate max-w-[100px]">
+              {ticker.name.split(",")[0].split(" ").slice(0, 2).join(" ")}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-col items-end">
+          <span className="text-sm font-semibold tabular-nums">
+            ${formatPrice(ticker.price)}
+          </span>
+          <span
+            className={`text-[11px] tabular-nums font-medium ${changeColor} flex items-center gap-0.5`}
+          >
+            {isPositive ? (
+              <TrendingUp className="w-3 h-3" />
+            ) : (
+              <TrendingDown className="w-3 h-3" />
+            )}
+            {isPositive ? "+" : ""}
+            {chgPct.toFixed(2)}%
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ─── KeyLevelsCard ────────────────────────────────────────────────────────────
+
+function KeyLevelsCard({ ticker }: { ticker: Ticker }) {
+  const levels = [
+    {
+      label: "Gamma Flip",
+      value: ticker.gammaFlip,
+      icon: Zap,
+      color: "text-amber-400",
+      desc: "Regime boundary",
+    },
+    {
+      label: "Max Pain",
+      value: ticker.maxPain,
+      icon: Target,
+      color: "text-purple-400",
+      desc: "Expiry magnet",
+    },
+    {
+      label: "Call Wall",
+      value: ticker.callWall,
+      icon: ArrowUpCircle,
+      color: "text-emerald-400",
+      desc: "Resistance",
+    },
+    {
+      label: "Put Wall",
+      value: ticker.putWall,
+      icon: ArrowDownCircle,
+      color: "text-red-400",
+      desc: "Support",
+    },
+  ];
+  const isPositiveGamma = ticker.gammaRegime?.toLowerCase().includes("positive");
+
+  return (
+    <Card className="p-4 border-card-border bg-card" data-testid="key-levels-card">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">
+          Key Levels
+        </h3>
+        <Badge
+          variant="outline"
+          className={`text-[10px] font-medium ${
+            isPositiveGamma
+              ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+              : "border-red-500/40 text-red-400 bg-red-500/10"
+          }`}
+        >
+          {ticker.gammaRegime || "—"}
+        </Badge>
+      </div>
+      <div className="space-y-2">
+        {levels.map((level) => (
+          <div
+            key={level.label}
+            className="flex items-center justify-between py-1.5 px-2 rounded-md bg-muted/30"
+          >
+            <div className="flex items-center gap-2">
+              <level.icon className={`w-3.5 h-3.5 ${level.color}`} />
+              <div>
+                <span className={`text-xs font-medium ${level.color}`}>
+                  {level.label}
+                </span>
+                <span className="text-[10px] text-muted-foreground ml-1.5">
+                  {level.desc}
+                </span>
+              </div>
+            </div>
+            <span className="text-sm font-semibold tabular-nums">
+              {level.value || "—"}
+            </span>
+          </div>
+        ))}
+      </div>
+      <Separator className="my-3" />
+      <div className="grid grid-cols-2 gap-3">
+        <div className="text-center p-2 rounded-md bg-muted/30">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
+            ATM IV
+          </div>
+          <div className="text-sm font-semibold tabular-nums text-amber-400">
+            {ticker.atmIv || "—"}
+          </div>
+        </div>
+        <div className="text-center p-2 rounded-md bg-muted/30">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
+            Net GEX
+          </div>
+          <div className="text-sm font-semibold tabular-nums text-primary">
+            {ticker.netGex || "—"}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+// ─── TickerDetail ─────────────────────────────────────────────────────────────
+
+function TickerDetail({ ticker }: { ticker: Ticker }) {
+  const chg = Number(ticker.change) || 0;
+  const chgPct = Number(ticker.changePercent) || 0;
+  const isPositive = chg >= 0;
+  return (
+    <Card className="p-4 border-card-border bg-card" data-testid="ticker-detail-card">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h2 className="text-lg font-bold tracking-wide">{ticker.symbol}</h2>
+          <p className="text-xs text-muted-foreground">{ticker.name}</p>
+        </div>
+        <div className="text-right">
+          <div className="text-xl font-bold tabular-nums">
+            ${formatPrice(ticker.price)}
+          </div>
+          <div
+            className={`text-sm tabular-nums font-medium flex items-center justify-end gap-1 ${
+              isPositive ? "text-emerald-400" : "text-red-400"
+            }`}
+          >
+            {isPositive ? (
+              <TrendingUp className="w-4 h-4" />
+            ) : (
+              <TrendingDown className="w-4 h-4" />
+            )}
+            {isPositive ? "+" : ""}
+            {chg.toFixed(2)} ({isPositive ? "+" : ""}
+            {chgPct.toFixed(2)}%)
+          </div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          { label: "Open", value: `$${formatPrice(ticker.open)}` },
+          { label: "Day High", value: `$${formatPrice(ticker.dayHigh)}` },
+          { label: "Day Low", value: `$${formatPrice(ticker.dayLow)}` },
+          { label: "Prev Close", value: `$${formatPrice(ticker.previousClose)}` },
+          { label: "Volume", value: formatVolume(ticker.volume) },
+          { label: "Market Cap", value: formatMarketCap(ticker.marketCap) },
+          { label: "P/E", value: ticker.pe ? Number(ticker.pe).toFixed(2) : "—" },
+          {
+            label: "EPS",
+            value: ticker.eps ? `$${Number(ticker.eps).toFixed(2)}` : "—",
+          },
+        ].map((item) => (
+          <div key={item.label} className="p-2 rounded-md bg-muted/30">
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">
+              {item.label}
+            </div>
+            <div className="text-sm font-semibold tabular-nums">{item.value}</div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// ─── GammaBar ─────────────────────────────────────────────────────────────────
+
+function GammaBar({ ticker }: { ticker: Ticker }) {
+  const putVal = parseFloat((ticker.putWall || "0").replace(/[$,]/g, ""));
+  const callVal = parseFloat((ticker.callWall || "0").replace(/[$,]/g, ""));
+  const flipVal = parseFloat((ticker.gammaFlip || "0").replace(/[$,]/g, ""));
+  const price = ticker.price;
+
+  if (!putVal || !callVal || !price) return null;
+
+  const allVals = [putVal, callVal, price];
+  if (flipVal) allVals.push(flipVal);
+  const min = Math.min(...allVals) * 0.99;
+  const max = Math.max(...allVals) * 1.01;
+  const range = max - min;
+  const toPct = (v: number) =>
+    Math.max(0, Math.min(100, ((v - min) / range) * 100));
+
+  const pricePct = toPct(price);
+  const putPct = toPct(putVal);
+  const callPct = toPct(callVal);
+  const flipPct = flipVal ? toPct(flipVal) : null;
+
+  const markers = [
+    { label: `Put Wall ${ticker.putWall}`, pct: putPct, color: "text-red-400" },
+    ...(flipPct !== null
+      ? [
+          {
+            label: `Flip ${ticker.gammaFlip}`,
+            pct: flipPct,
+            color: "text-amber-400",
+          },
+        ]
+      : []),
+    {
+      label: `Price $${formatPrice(ticker.price)}`,
+      pct: pricePct,
+      color: "text-white font-medium",
+    },
+    {
+      label: `Call Wall ${ticker.callWall}`,
+      pct: callPct,
+      color: "text-emerald-400",
+    },
+  ].sort((a, b) => a.pct - b.pct);
+
+  return (
+    <Card className="p-4 border-card-border bg-card" data-testid="gamma-bar-card">
+      <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3">
+        Price vs Options Levels
+      </h3>
+      <div className="relative h-10 bg-muted/40 rounded-lg overflow-hidden">
+        <div
+          className="absolute top-0 bottom-0 bg-red-500/15 border-r-2 border-red-400"
+          style={{ left: 0, width: `${putPct}%` }}
+        />
+        <div
+          className="absolute top-0 bottom-0 bg-emerald-500/15 border-l-2 border-emerald-400"
+          style={{ left: `${callPct}%`, right: 0 }}
+        />
+        {flipPct !== null && (
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-amber-400/70"
+            style={{ left: `${flipPct}%` }}
+          />
+        )}
+        <div
+          className="absolute top-0 bottom-0 w-1 bg-white shadow-lg shadow-white/30 z-10"
+          style={{ left: `${pricePct}%` }}
+        />
+      </div>
+      <div className="flex justify-between mt-2 text-[10px] text-muted-foreground">
+        {markers.map((m, i) => (
+          <span key={i} className={m.color}>
+            {m.label}
+          </span>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// ─── NewsItem ─────────────────────────────────────────────────────────────────
+
+function NewsItem({
+  item,
+  onClick,
+}: {
+  item: News;
+  onClick: () => void;
+}) {
+  const sentimentColor =
+    item.sentiment === "bullish"
+      ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/30"
+      : item.sentiment === "bearish"
+      ? "text-red-400 bg-red-500/10 border-red-500/30"
+      : "text-amber-400 bg-amber-500/10 border-amber-500/30";
+
+  const SentimentIcon =
+    item.sentiment === "bullish"
+      ? TrendingUp
+      : item.sentiment === "bearish"
+      ? TrendingDown
+      : Minus;
+
+  return (
+    <div
+      className="py-3 px-3 hover:bg-muted/30 transition-colors rounded-lg cursor-pointer"
+      data-testid={`news-item-${item.id}`}
+      onClick={onClick}
+    >
+      <div className="flex items-start gap-2.5">
+        <div
+          className={`p-1 rounded border ${sentimentColor} mt-0.5 flex-shrink-0`}
+        >
+          <SentimentIcon className="w-3 h-3" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            {item.relatedTicker && (
+              <Badge
+                variant="outline"
+                className="text-[9px] px-1.5 py-0 h-4 font-semibold tracking-wider"
+              >
+                {item.relatedTicker}
+              </Badge>
+            )}
+            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+              <Clock className="w-2.5 h-2.5" />
+              {timeAgo(item.timestamp)}
+            </span>
+          </div>
+          <p className="text-xs font-medium leading-snug">{item.title}</p>
+          <span className="text-[10px] text-muted-foreground mt-1 block">
+            {item.source}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── NewsModal ────────────────────────────────────────────────────────────────
+
+function NewsModal({
+  item,
+  open,
+  onClose,
+}: {
+  item: News | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  if (!item) return null;
+
+  const sentimentColor =
+    item.sentiment === "bullish"
+      ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/30"
+      : item.sentiment === "bearish"
+      ? "text-red-400 bg-red-500/10 border-red-500/30"
+      : "text-amber-400 bg-amber-500/10 border-amber-500/30";
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="bg-card border-card-border max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="text-sm font-bold leading-snug pr-6">
+            {item.title}
+          </DialogTitle>
+          <DialogDescription asChild>
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {item.relatedTicker && (
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] px-2 py-0.5 font-semibold tracking-wider"
+                  >
+                    {item.relatedTicker}
+                  </Badge>
+                )}
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] px-2 py-0.5 font-medium ${sentimentColor}`}
+                >
+                  {item.sentiment === "bullish"
+                    ? "Bullish"
+                    : item.sentiment === "bearish"
+                    ? "Bearish"
+                    : "Neutral"}
+                </Badge>
+              </div>
+              {item.summary && (
+                <p className="text-xs text-foreground/80 leading-relaxed">
+                  {item.summary}
+                </p>
+              )}
+              <div className="flex items-center gap-3 text-[10px] text-muted-foreground pt-1">
+                {item.source && (
+                  <span className="font-medium">{item.source}</span>
+                )}
+                <span className="flex items-center gap-1">
+                  <Clock className="w-2.5 h-2.5" />
+                  {timeAgo(item.timestamp)}
+                </span>
+              </div>
+              {item.url && (
+                <a
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block text-[11px] text-primary hover:underline mt-1"
+                >
+                  Read full article →
+                </a>
+              )}
+            </div>
+          </DialogDescription>
+        </DialogHeader>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── AllKeyLevelsTable ────────────────────────────────────────────────────────
+
+function AllKeyLevelsTable({ tickers }: { tickers: Ticker[] }) {
+  return (
+    <Card
+      className="p-4 border-card-border bg-card"
+      data-testid="all-key-levels-table"
+    >
+      <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+        <BarChart3 className="w-3.5 h-3.5" />
+        Portfolio Key Levels Overview
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th className="text-left py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                Symbol
+              </th>
+              <th className="text-right py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                Price
+              </th>
+              <th className="text-right py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                Chg%
+              </th>
+              <th className="text-right py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                <span className="text-amber-400">Gamma Flip</span>
+              </th>
+              <th className="text-right py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                <span className="text-purple-400">Max Pain</span>
+              </th>
+              <th className="text-right py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                <span className="text-emerald-400">Call Wall</span>
+              </th>
+              <th className="text-right py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                <span className="text-red-400">Put Wall</span>
+              </th>
+              <th className="text-center py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                Regime
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {tickers.map((t) => {
+              const isPositive = (Number(t.change) || 0) >= 0;
+              const isPositiveGamma = t.gammaRegime
+                ?.toLowerCase()
+                .includes("positive");
+              return (
+                <tr
+                  key={t.symbol}
+                  className="border-b border-border/50 hover:bg-muted/20 transition-colors"
+                >
+                  <td className="py-2 px-2 font-semibold">{t.symbol}</td>
+                  <td className="py-2 px-2 text-right tabular-nums font-medium">
+                    ${formatPrice(t.price)}
+                  </td>
+                  <td
+                    className={`py-2 px-2 text-right tabular-nums font-medium ${
+                      isPositive ? "text-emerald-400" : "text-red-400"
+                    }`}
+                  >
+                    {isPositive ? "+" : ""}
+                    {(Number(t.changePercent) || 0).toFixed(2)}%
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums text-amber-400">
+                    {t.gammaFlip || "—"}
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums text-purple-400">
+                    {t.maxPain || "—"}
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums text-emerald-400">
+                    {t.callWall || "—"}
+                  </td>
+                  <td className="py-2 px-2 text-right tabular-nums text-red-400">
+                    {t.putWall || "—"}
+                  </td>
+                  <td className="py-2 px-2 text-center">
+                    <div className="flex items-center justify-center gap-1">
+                      <span
+                        className={`inline-block w-2 h-2 rounded-full ${
+                          isPositiveGamma ? "bg-emerald-400" : "bg-red-400"
+                        }`}
+                      />
+                      <span
+                        className={`text-[9px] ${
+                          isPositiveGamma ? "text-emerald-400" : "text-red-400"
+                        }`}
+                      >
+                        {isPositiveGamma ? "+" : "-"}GEX
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ─── OptionsFlowDetailModal ───────────────────────────────────────────────────
+
+function OptionsFlowDetailModal({
+  flow,
+  open,
+  onClose,
+}: {
+  flow: OptionsFlow | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  if (!flow) return null;
+  const vd = parseFlowVolume(flow.volume);
+  const isCall = (vd.callPut || flow.type || "").toUpperCase().includes("C");
+  const isBuy = (vd.direction || "").toUpperCase().includes("BUY");
+  const confidence = vd.confidence ?? 0;
+  const confColor =
+    confidence >= 90
+      ? "text-emerald-400"
+      : confidence >= 75
+      ? "text-amber-400"
+      : "text-red-400";
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="bg-card border-card-border max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="text-sm font-bold font-mono">
+            {vd.optionContract || `${flow.symbol} ${flow.type} ${flow.strike}`}
+          </DialogTitle>
+          <DialogDescription asChild>
+            <div className="pt-3 space-y-4">
+              {/* Badges row */}
+              <div className="flex flex-wrap gap-2">
+                <Badge
+                  className={`text-[10px] font-semibold ${
+                    isCall
+                      ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
+                      : "bg-red-500/20 text-red-400 border-red-500/40"
+                  }`}
+                  variant="outline"
+                >
+                  {isCall ? "CALL" : "PUT"}
+                </Badge>
+                <Badge
+                  className={`text-[10px] font-semibold ${
+                    isBuy
+                      ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
+                      : "bg-red-500/20 text-red-400 border-red-500/40"
+                  }`}
+                  variant="outline"
+                >
+                  {vd.direction || "—"}
+                </Badge>
+                {flow.signal && (
+                  <Badge
+                    className="text-[10px] font-semibold bg-amber-500/20 text-amber-400 border-amber-500/40"
+                    variant="outline"
+                  >
+                    {flow.signal.toUpperCase()}
+                  </Badge>
+                )}
+                {confidence > 0 && (
+                  <Badge
+                    className={`text-[10px] font-semibold ${confColor}`}
+                    variant="outline"
+                  >
+                    CONF {confidence}%
+                  </Badge>
+                )}
+              </div>
+
+              {/* Stats grid */}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { label: "Symbol", value: flow.symbol },
+                  { label: "Strike", value: flow.strike || "—" },
+                  { label: "Expiry", value: flow.expiry || "—" },
+                  {
+                    label: "Contracts",
+                    value: vd.contracts?.toLocaleString() || "—",
+                  },
+                  { label: "Notional", value: formatNotional(vd.notional ?? null) },
+                  {
+                    label: "Premium",
+                    value: flow.premium || formatNotional(vd.notional ?? null),
+                  },
+                  {
+                    label: "# Trades",
+                    value: vd.trades?.toString() || "—",
+                  },
+                  {
+                    label: "Duration (ms)",
+                    value: vd.durationMs?.toString() || "—",
+                  },
+                  { label: "Exchanges", value: vd.exchanges?.toString() || "—" },
+                  {
+                    label: "First Fill",
+                    value: vd.first ? `$${Number(vd.first).toFixed(2)}` : "—",
+                  },
+                  {
+                    label: "Last Fill",
+                    value: vd.last ? `$${Number(vd.last).toFixed(2)}` : "—",
+                  },
+                  {
+                    label: "Bid / Ask",
+                    value:
+                      vd.bid && vd.ask
+                        ? `$${Number(vd.bid).toFixed(2)} / $${Number(vd.ask).toFixed(2)}`
+                        : "—",
+                  },
+                  { label: "Time (ET)", value: vd.time || "—" },
+                  {
+                    label: "OI",
+                    value: flow.openInterest || "—",
+                  },
+                  { label: "Sentiment", value: flow.sentiment || "—" },
+                ].map((item) => (
+                  <div key={item.label} className="p-2 rounded bg-muted/30">
+                    <div className="text-[9px] text-muted-foreground uppercase tracking-wider mb-0.5">
+                      {item.label}
+                    </div>
+                    <div className="text-xs font-semibold tabular-nums">
+                      {item.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {flow.details && (
+                <div className="p-3 rounded bg-muted/20 border border-border/40">
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1">
+                    Details
+                  </div>
+                  <p className="text-xs leading-relaxed text-foreground/80">
+                    {flow.details}
+                  </p>
+                </div>
+              )}
+            </div>
+          </DialogDescription>
+        </DialogHeader>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Enhanced OptionsFlowTable (OptionWhales-style) ───────────────────────────
+
+function OptionsFlowTable({ flowData }: { flowData: OptionsFlow[] }) {
+  const [activeTab, setActiveTab] = useState<
+    "large" | "oi" | "gex" | "ai"
+  >("large");
+  const [selectedFlow, setSelectedFlow] = useState<OptionsFlow | null>(null);
+
+  const tabs = [
+    { key: "large" as const, label: "Large Orders", icon: Zap },
+    { key: "oi" as const, label: "OI & Volume", icon: Eye },
+    { key: "gex" as const, label: "GEX & IV", icon: Layers },
+    { key: "ai" as const, label: "AI Report", icon: Brain },
+  ];
+
+  function getTypeBadge(signal: string | null) {
+    switch ((signal || "").toLowerCase()) {
+      case "sweep":
+        return (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            SWEEP
+          </span>
+        );
+      case "burst":
+        return (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400 border border-orange-500/30">
+            BURST
+          </span>
+        );
+      case "block":
+        return (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 border border-blue-500/30">
+            BLOCK
+          </span>
+        );
+      case "unusual":
+        return (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">
+            UNUSUAL
+          </span>
+        );
+      default:
+        return (
+          <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground border border-border/40">
+            SINGLE
+          </span>
+        );
+    }
+  }
+
+  function getConfColor(conf: number) {
+    if (conf >= 90) return "text-emerald-400";
+    if (conf >= 75) return "text-amber-400";
+    return "text-red-400";
+  }
+
+  return (
+    <Card
+      className="border-card-border bg-card overflow-hidden"
+      data-testid="options-flow-table"
+    >
+      {/* Tab Bar */}
+      <div className="flex items-center border-b border-border bg-muted/20">
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveTab(tab.key)}
+            className={`flex items-center gap-1.5 px-4 py-2.5 text-[11px] font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === tab.key
+                ? "border-primary text-primary bg-primary/5"
+                : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30"
+            }`}
+            data-testid={`flow-tab-${tab.key}`}
+          >
+            <tab.icon className="w-3 h-3" />
+            {tab.label}
+          </button>
+        ))}
+        <div className="ml-auto px-4 flex items-center gap-2">
+          <Badge
+            variant="outline"
+            className="text-[9px] border-amber-500/30 text-amber-400 bg-amber-500/10"
+          >
+            {flowData.length} signals
+          </Badge>
+        </div>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === "large" ? (
+        <div className="p-0">
+          {flowData.length === 0 ? (
+            <div className="text-center py-8 text-xs text-muted-foreground">
+              No options flow signals
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs min-w-[1100px]">
+                <thead>
+                  <tr className="border-b border-border bg-muted/10 text-muted-foreground">
+                    {[
+                      { label: "OPTION", align: "left" },
+                      { label: "TYPE", align: "center" },
+                      { label: "DIR", align: "center" },
+                      { label: "CONTRACTS", align: "right" },
+                      { label: "NOTIONAL", align: "right" },
+                      { label: "PREMIUM", align: "right" },
+                      { label: "TRADES", align: "right" },
+                      { label: "TIME (ET)", align: "center" },
+                      { label: "DUR(MS)", align: "right" },
+                      { label: "FIRST", align: "right" },
+                      { label: "LAST", align: "right" },
+                      { label: "BID", align: "right" },
+                      { label: "ASK", align: "right" },
+                      { label: "EXCH", align: "right" },
+                      { label: "CONF", align: "right" },
+                    ].map((col) => (
+                      <th
+                        key={col.label}
+                        className={`py-2 px-2 font-semibold uppercase tracking-wider text-[9px] text-${col.align}`}
+                      >
+                        {col.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {flowData.map((f) => {
+                    const vd = parseFlowVolume(f.volume);
+                    const isCall = (vd.callPut || f.type || "").toUpperCase().includes("C");
+                    const dirStr = (vd.direction || "").toUpperCase();
+                    const isBuy = dirStr.includes("BUY");
+                    const conf = vd.confidence ?? 0;
+                    const confColor = getConfColor(conf);
+                    const contractName =
+                      vd.optionContract ||
+                      `${f.symbol}${f.expiry || ""}${isCall ? "C" : "P"}${f.strike || ""}`;
+
+                    return (
+                      <tr
+                        key={f.id}
+                        className="border-b border-border/20 hover:bg-muted/20 transition-colors cursor-pointer"
+                        onClick={() => setSelectedFlow(f)}
+                        data-testid={`flow-row-${f.id}`}
+                      >
+                        {/* OPTION */}
+                        <td className="py-1.5 px-2 font-mono text-[10px] whitespace-nowrap">
+                          <span
+                            className={`font-semibold ${
+                              isCall ? "text-emerald-400" : "text-red-400"
+                            }`}
+                          >
+                            {contractName}
+                          </span>
+                        </td>
+                        {/* TYPE */}
+                        <td className="py-1.5 px-2 text-center">
+                          {getTypeBadge(f.signal)}
+                        </td>
+                        {/* DIR */}
+                        <td className="py-1.5 px-2 text-center">
+                          <span
+                            className={`text-[10px] font-bold ${
+                              isBuy ? "text-emerald-400" : "text-red-400"
+                            }`}
+                          >
+                            {dirStr || (isBuy ? "BUY" : "SELL")}
+                          </span>
+                        </td>
+                        {/* CONTRACTS */}
+                        <td className="py-1.5 px-2 text-right tabular-nums font-medium">
+                          {vd.contracts?.toLocaleString() || "—"}
+                        </td>
+                        {/* NOTIONAL */}
+                        <td className="py-1.5 px-2 text-right tabular-nums text-amber-400 font-medium">
+                          {formatNotional(vd.notional ?? null)}
+                        </td>
+                        {/* PREMIUM */}
+                        <td className="py-1.5 px-2 text-right tabular-nums text-primary font-medium">
+                          {f.premium || formatNotional(vd.notional ?? null)}
+                        </td>
+                        {/* TRADES */}
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {vd.trades?.toString() || "—"}
+                        </td>
+                        {/* TIME */}
+                        <td className="py-1.5 px-2 text-center tabular-nums text-muted-foreground text-[10px] whitespace-nowrap">
+                          {vd.time || timeAgo(f.timestamp)}
+                        </td>
+                        {/* DUR */}
+                        <td className="py-1.5 px-2 text-right tabular-nums text-muted-foreground">
+                          {vd.durationMs?.toString() || "—"}
+                        </td>
+                        {/* FIRST */}
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {vd.first ? `$${Number(vd.first).toFixed(2)}` : "—"}
+                        </td>
+                        {/* LAST */}
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {vd.last ? `$${Number(vd.last).toFixed(2)}` : "—"}
+                        </td>
+                        {/* BID */}
+                        <td className="py-1.5 px-2 text-right tabular-nums text-red-400/80">
+                          {vd.bid ? `$${Number(vd.bid).toFixed(2)}` : "—"}
+                        </td>
+                        {/* ASK */}
+                        <td className="py-1.5 px-2 text-right tabular-nums text-emerald-400/80">
+                          {vd.ask ? `$${Number(vd.ask).toFixed(2)}` : "—"}
+                        </td>
+                        {/* EXCH */}
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {vd.exchanges?.toString() || "—"}
+                        </td>
+                        {/* CONF */}
+                        <td className={`py-1.5 px-2 text-right tabular-nums font-semibold ${confColor}`}>
+                          {conf > 0 ? `${conf}%` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-3">
+          {activeTab === "oi" && (
+            <>
+              <Eye className="w-8 h-8 opacity-30" />
+              <span className="text-xs font-medium">OI & Volume — Coming Soon</span>
+            </>
+          )}
+          {activeTab === "gex" && (
+            <>
+              <Layers className="w-8 h-8 opacity-30" />
+              <span className="text-xs font-medium">GEX & IV Analytics — Coming Soon</span>
+            </>
+          )}
+          {activeTab === "ai" && (
+            <>
+              <Brain className="w-8 h-8 opacity-30" />
+              <span className="text-xs font-medium">AI Report — Coming Soon</span>
+            </>
+          )}
+          <span className="text-[10px] text-muted-foreground/50">
+            This panel is under construction
+          </span>
+        </div>
+      )}
+
+      {/* Row Detail Modal */}
+      <OptionsFlowDetailModal
+        flow={selectedFlow}
+        open={selectedFlow !== null}
+        onClose={() => setSelectedFlow(null)}
+      />
+    </Card>
+  );
+}
+
+// ─── EarningsCalendar ─────────────────────────────────────────────────────────
+
+function EarningsCalendar({
+  earningsData,
+  stockSymbols,
+}: {
+  earningsData: Earning[];
+  stockSymbols: string[];
+}) {
+  const bySymbol = useMemo(() => {
+    const map: Record<
+      string,
+      { past: Earning[]; upcoming: Earning | null }
+    > = {};
+    for (const sym of stockSymbols) {
+      const symEarnings = earningsData.filter((e) => e.symbol === sym);
+      const past = symEarnings
+        .filter((e) => !e.isUpcoming)
+        .sort(
+          (a, b) =>
+            new Date(b.date).getTime() - new Date(a.date).getTime()
+        )
+        .slice(0, 3);
+      const upcoming = symEarnings.find((e) => e.isUpcoming === 1) || null;
+      map[sym] = { past, upcoming };
+    }
+    return map;
+  }, [earningsData, stockSymbols]);
+
+  const surpriseColor = (s: string | null) => {
+    if (s === "beat") return "text-emerald-400 bg-emerald-500/15";
+    if (s === "miss") return "text-red-400 bg-red-500/15";
+    if (s === "mixed") return "text-amber-400 bg-amber-500/15";
+    if (s === "inline") return "text-blue-400 bg-blue-500/15";
+    return "text-muted-foreground";
+  };
+
+  return (
+    <Card className="p-4 border-card-border bg-card">
+      <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+        <Calendar className="w-3.5 h-3.5" />
+        Earnings Calendar
+        <Badge
+          variant="outline"
+          className="text-[9px] ml-auto border-primary/30 text-primary bg-primary/10"
+        >
+          Perplexity Finance
+        </Badge>
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border text-muted-foreground">
+              <th className="text-left py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                Symbol
+              </th>
+              <th
+                className="text-center py-2 px-2 font-medium uppercase tracking-wider text-[10px]"
+                colSpan={3}
+              >
+                Last 3 Quarters
+              </th>
+              <th className="text-center py-2 px-2 font-medium uppercase tracking-wider text-[10px]">
+                Next Earnings
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {stockSymbols.map((sym) => {
+              const data = bySymbol[sym];
+              if (!data) return null;
+              const { past, upcoming } = data;
+              const days = upcoming ? daysUntil(upcoming.date) : null;
+              const isWithin2Weeks =
+                days !== null && days >= 0 && days <= 14;
+
+              return (
+                <tr
+                  key={sym}
+                  className="border-b border-border/50 hover:bg-muted/20 transition-colors align-top"
+                >
+                  <td className="py-2 px-2 font-semibold whitespace-nowrap">
+                    {sym}
+                  </td>
+                  {[0, 1, 2].map((idx) => {
+                    const e = past[idx];
+                    if (!e)
+                      return (
+                        <td
+                          key={idx}
+                          className="py-2 px-2 text-center text-muted-foreground"
+                        >
+                          —
+                        </td>
+                      );
+                    return (
+                      <td key={idx} className="py-2 px-1.5">
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span className="text-[9px] text-muted-foreground">
+                            {e.period}
+                          </span>
+                          <span className="tabular-nums text-[10px]">
+                            {e.actualEps != null
+                              ? e.actualEps.toFixed(2)
+                              : "—"}{" "}
+                            /{" "}
+                            {e.estimatedEps != null
+                              ? e.estimatedEps.toFixed(2)
+                              : "—"}
+                          </span>
+                          <span
+                            className={`text-[9px] px-1.5 py-0 rounded-full font-medium ${surpriseColor(
+                              e.surprise
+                            )}`}
+                          >
+                            {e.surprise || "—"}
+                          </span>
+                        </div>
+                      </td>
+                    );
+                  })}
+                  <td className="py-2 px-2">
+                    {upcoming ? (
+                      <div
+                        className={`flex flex-col items-center gap-0.5 rounded-md px-2 py-1 ${
+                          isWithin2Weeks
+                            ? "bg-amber-500/10 border border-amber-500/30"
+                            : ""
+                        }`}
+                      >
+                        <span className="text-[10px] font-medium">
+                          {formatDate(upcoming.date)}
+                        </span>
+                        <span className="text-[9px] text-muted-foreground tabular-nums">
+                          Est EPS:{" "}
+                          {upcoming.estimatedEps != null
+                            ? `$${upcoming.estimatedEps.toFixed(2)}`
+                            : "TBD"}
+                        </span>
+                        <span className="text-[9px] text-muted-foreground tabular-nums">
+                          Est Rev: {formatRevenue(upcoming.estimatedRevenue)}
+                        </span>
+                        {days !== null && days >= 0 && (
+                          <span
+                            className={`text-[9px] font-medium ${
+                              isWithin2Weeks
+                                ? "text-amber-400"
+                                : "text-muted-foreground"
+                            }`}
+                          >
+                            {days === 0 ? "TODAY" : `${days}d away`}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground text-center block">
+                        TBD
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ─── MacroCalendar ────────────────────────────────────────────────────────────
+
+function countryFlag(country: string): string {
+  if (country === "US") return "🇺🇸";
+  if (country === "JP") return "🇯🇵";
+  if (country === "EU") return "🇪🇺";
+  if (country === "GB") return "🇬🇧";
+  if (country === "CN") return "🇨🇳";
+  return country;
+}
+
+function MacroCalendar({
+  events,
+  showUsaOnly,
+  onToggleUsaOnly,
+}: {
+  events: MacroEvent[];
+  showUsaOnly: boolean;
+  onToggleUsaOnly: () => void;
+}) {
+  const groupedByWeek = useMemo(() => {
+    const now = new Date();
+    const fourWeeksOut = new Date(now.getTime() + 28 * 24 * 60 * 60 * 1000);
+
+    const filtered = events
+      .filter((e) => {
+        const d = new Date(e.date);
+        if (d > fourWeeksOut) return false;
+        if (showUsaOnly && e.country !== "US") return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const da = new Date(a.date).getTime();
+        const db = new Date(b.date).getTime();
+        return da - db;
+      });
+
+    const weeks: { label: string; events: MacroEvent[] }[] = [];
+    let currentWeekStart: Date | null = null;
+    let currentWeekEvents: MacroEvent[] = [];
+
+    for (const ev of filtered) {
+      const d = new Date(ev.date);
+      const weekStart = new Date(d);
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+
+      if (
+        !currentWeekStart ||
+        weekStart.getTime() !== currentWeekStart.getTime()
+      ) {
+        if (currentWeekEvents.length > 0) {
+          const weekEnd = new Date(currentWeekStart!);
+          weekEnd.setDate(weekEnd.getDate() + 6);
+          weeks.push({
+            label: `${currentWeekStart!.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            })} – ${weekEnd.toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+            })}`,
+            events: currentWeekEvents,
+          });
+        }
+        currentWeekStart = weekStart;
+        currentWeekEvents = [];
+      }
+      currentWeekEvents.push(ev);
+    }
+
+    if (currentWeekEvents.length > 0 && currentWeekStart) {
+      const weekEnd = new Date(currentWeekStart);
+      weekEnd.setDate(weekEnd.getDate() + 6);
+      weeks.push({
+        label: `${currentWeekStart.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        })} – ${weekEnd.toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+        })}`,
+        events: currentWeekEvents,
+      });
+    }
+
+    return weeks;
+  }, [events, showUsaOnly]);
+
+  const actualColor = (ev: MacroEvent) => {
+    if (!ev.actual || !ev.forecast) return "text-foreground";
+    const actual = parseFloat(ev.actual.replace(/[%,]/g, ""));
+    const forecast = parseFloat(ev.forecast.replace(/[%,]/g, ""));
+    if (isNaN(actual) || isNaN(forecast)) return "text-foreground";
+    if (actual > forecast) return "text-emerald-400";
+    if (actual < forecast) return "text-red-400";
+    return "text-foreground";
+  };
+
+  return (
+    <Card className="p-4 border-card-border bg-card">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+          <Globe className="w-3.5 h-3.5" />
+          Macro Calendar {showUsaOnly ? "(US Only)" : "(US / JP)"}
+        </h3>
+        <div className="flex items-center gap-2">
+          <Badge
+            variant="outline"
+            className="text-[9px] border-primary/30 text-primary bg-primary/10"
+          >
+            Investing.com
+          </Badge>
+          <button
+            onClick={onToggleUsaOnly}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-colors border ${
+              showUsaOnly
+                ? "border-blue-500/50 text-blue-400 bg-blue-500/15"
+                : "border-border text-muted-foreground hover:text-foreground hover:bg-muted/40"
+            }`}
+            data-testid="btn-usa-filter"
+          >
+            <Filter className="w-3 h-3" />
+            USA Only
+          </button>
+        </div>
+      </div>
+      <div className="space-y-4">
+        {groupedByWeek.length === 0 && (
+          <div className="text-center py-6 text-xs text-muted-foreground">
+            No 3-star macro events found for the current period
+          </div>
+        )}
+        {groupedByWeek.map((week, wi) => (
+          <div key={wi}>
+            <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-2 px-1">
+              {week.label}
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border text-muted-foreground">
+                    <th className="text-left py-1.5 px-2 font-medium text-[10px]">
+                      Date
+                    </th>
+                    <th className="text-left py-1.5 px-2 font-medium text-[10px]">
+                      Time
+                    </th>
+                    <th className="text-center py-1.5 px-1 font-medium text-[10px]" />
+                    <th className="text-left py-1.5 px-2 font-medium text-[10px]">
+                      Event
+                    </th>
+                    <th className="text-right py-1.5 px-2 font-medium text-[10px]">
+                      Prev
+                    </th>
+                    <th className="text-right py-1.5 px-2 font-medium text-[10px]">
+                      Forecast
+                    </th>
+                    <th className="text-right py-1.5 px-2 font-medium text-[10px]">
+                      Actual
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {week.events.map((ev, ei) => (
+                    <tr
+                      key={ei}
+                      className="border-b border-border/30 hover:bg-muted/20 transition-colors"
+                    >
+                      <td className="py-1.5 px-2 tabular-nums whitespace-nowrap">
+                        {new Date(ev.date).toLocaleDateString("en-US", {
+                          month: "short",
+                          day: "numeric",
+                        })}
+                      </td>
+                      <td className="py-1.5 px-2 text-muted-foreground whitespace-nowrap text-[10px]">
+                        {ev.time}
+                      </td>
+                      <td className="py-1.5 px-1 text-center">
+                        {countryFlag(ev.country)}
+                      </td>
+                      <td className="py-1.5 px-2 font-medium max-w-[280px] truncate">
+                        {ev.event}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-muted-foreground">
+                        {ev.previous || "—"}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums text-muted-foreground">
+                        {ev.forecast || "—"}
+                      </td>
+                      <td
+                        className={`py-1.5 px-2 text-right tabular-nums font-medium ${actualColor(ev)}`}
+                      >
+                        {ev.actual || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// ─── MarketOverviewStrip ──────────────────────────────────────────────────────
+
+function MarketOverviewStrip({ tickers }: { tickers: Ticker[] }) {
+  const indices = tickers.filter((t) =>
+    ["SPX", "QQQ", "DIA", "IWM"].includes(t.symbol)
+  );
+  return (
+    <div className="flex items-center gap-4 overflow-x-auto py-1 px-1 no-scrollbar">
+      {indices.map((t) => {
+        const isPositive = (Number(t.change) || 0) >= 0;
+        return (
+          <div key={t.symbol} className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-xs font-semibold">{t.symbol}</span>
+            <span className="text-xs tabular-nums">{formatPrice(t.price)}</span>
+            <span
+              className={`text-[11px] tabular-nums font-medium ${
+                isPositive ? "text-emerald-400" : "text-red-400"
+              }`}
+            >
+              {isPositive ? "+" : ""}
+              {(Number(t.changePercent) || 0).toFixed(2)}%
+            </span>
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
+        <span className="text-[10px] text-emerald-400 font-medium">LIVE</span>
+      </div>
+    </div>
+  );
+}
+
+// ─── TweetItem ────────────────────────────────────────────────────────────────
+
+function TweetItem({ tweet }: { tweet: Tweet }) {
+  const avatarColors = [
+    "bg-blue-500","bg-purple-500","bg-emerald-500","bg-amber-500",
+    "bg-red-500","bg-cyan-500","bg-pink-500","bg-indigo-500",
+  ];
+  const colorIdx =
+    tweet.username.charCodeAt(0) % avatarColors.length;
+  const avatarBg = avatarColors[colorIdx];
+  const firstLetter = (tweet.displayName || tweet.username || "?")[0].toUpperCase();
+
+  return (
+    <div
+      className="py-3 px-3 hover:bg-muted/20 transition-colors border-b border-border/40 last:border-0"
+      data-testid={`tweet-item-${tweet.username}`}
+    >
+      <div className="flex items-start gap-2.5">
+        {/* Avatar */}
+        <div
+          className={`w-7 h-7 rounded-full ${avatarBg} flex items-center justify-center flex-shrink-0 text-[11px] font-bold text-white`}
+        >
+          {firstLetter}
+        </div>
+        <div className="flex-1 min-w-0">
+          {/* Header row */}
+          <div className="flex items-center gap-1.5 flex-wrap mb-0.5">
+            <span className="text-[11px] font-bold leading-none truncate max-w-[100px]">
+              {tweet.displayName}
+            </span>
+            <span className="text-[10px] text-muted-foreground leading-none">
+              @{tweet.username}
+            </span>
+            {tweet.isRetweet && (
+              <span className="flex items-center gap-0.5 text-[9px] text-muted-foreground/60">
+                <Repeat2 className="w-3 h-3" />
+                RT
+              </span>
+            )}
+            <span className="text-[10px] text-muted-foreground ml-auto flex-shrink-0">
+              {timeAgo(tweet.timestamp)}
+            </span>
+          </div>
+          {/* Tweet text */}
+          <p className="text-[11px] leading-relaxed text-foreground/90 break-words">
+            {tweet.text}
+          </p>
+          {/* Link */}
+          {tweet.url && (
+            <a
+              href={tweet.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[10px] text-primary hover:underline mt-1"
+              data-testid={`tweet-link-${tweet.username}`}
+            >
+              <ExternalLink className="w-2.5 h-2.5" />
+              View on X
+            </a>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── XFeedPanel ───────────────────────────────────────────────────────────────
+
+function XFeedPanel() {
+  const { data: tweets = [], isLoading } = useQuery<Tweet[]>({
+    queryKey: ["/api/tweets"],
+    refetchInterval: 30000,
+  });
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-border">
+        <div className="flex items-center gap-2">
+          <Twitter className="w-3 h-3 text-sky-400" />
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            X / Twitter Feed
+          </span>
+        </div>
+        <span className="text-[10px] text-muted-foreground tabular-nums">
+          {tweets.length} posts
+        </span>
+      </div>
+      <ScrollArea className="flex-1">
+        {isLoading ? (
+          <div className="p-3 space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex gap-2.5">
+                <Skeleton className="w-7 h-7 rounded-full flex-shrink-0" />
+                <div className="flex-1 space-y-2">
+                  <Skeleton className="h-3 w-24" />
+                  <Skeleton className="h-3 w-full" />
+                  <Skeleton className="h-3 w-4/5" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : tweets.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 text-muted-foreground gap-2">
+            <Twitter className="w-6 h-6 opacity-30" />
+            <span className="text-xs">No tweets available</span>
+          </div>
+        ) : (
+          <div>
+            {tweets.map((tweet, i) => (
+              <TweetItem key={`${tweet.username}-${i}`} tweet={tweet} />
+            ))}
+          </div>
+        )}
+      </ScrollArea>
+    </div>
+  );
+}
+
+// ─── Right Sidebar with tabs ──────────────────────────────────────────────────
+
+function RightSidebar({
+  newsItems,
+  filteredNews,
+  newsTickerFilter,
+  setNewsTickerFilter,
+  loadingNews,
+  onNewsClick,
+}: {
+  newsItems: News[];
+  filteredNews: News[];
+  newsTickerFilter: string;
+  setNewsTickerFilter: (v: string) => void;
+  loadingNews: boolean;
+  onNewsClick: (item: News) => void;
+}) {
+  const [activeTab, setActiveTab] = useState<"news" | "xfeed">("news");
+
+  return (
+    <aside className="w-80 border-l border-border flex flex-col bg-card/40">
+      {/* Tab switcher */}
+      <div className="flex border-b border-border">
+        <button
+          onClick={() => setActiveTab("news")}
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === "news"
+              ? "border-primary text-primary bg-primary/5"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/20"
+          }`}
+          data-testid="tab-news-feed"
+        >
+          <Radio className="w-3 h-3" />
+          News Feed
+        </button>
+        <button
+          onClick={() => setActiveTab("xfeed")}
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 text-[11px] font-medium transition-colors border-b-2 -mb-px ${
+            activeTab === "xfeed"
+              ? "border-sky-400 text-sky-400 bg-sky-400/5"
+              : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/20"
+          }`}
+          data-testid="tab-x-feed"
+        >
+          <Twitter className="w-3 h-3" />
+          X Feed
+        </button>
+      </div>
+
+      {/* News Feed panel */}
+      {activeTab === "news" && (
+        <>
+          <div className="px-4 py-2.5 border-b border-border">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Radio className="w-3 h-3 text-emerald-400 animate-pulse-dot" />
+                <h2 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  Live News Feed
+                </h2>
+              </div>
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {filteredNews.length} items
+              </span>
+            </div>
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
+              <Input
+                placeholder="Filter by ticker (e.g. TSLA, NVDA)..."
+                value={newsTickerFilter}
+                onChange={(e) => setNewsTickerFilter(e.target.value)}
+                className="h-7 text-xs pl-7 pr-7 bg-muted/30 border-border"
+                data-testid="news-ticker-filter"
+              />
+              {newsTickerFilter && (
+                <button
+                  onClick={() => setNewsTickerFilter("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  data-testid="btn-clear-news-filter"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+            {newsTickerFilter && (
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <Badge
+                  variant="outline"
+                  className="text-[9px] px-1.5 py-0 h-4 font-semibold tracking-wider border-primary/40 text-primary"
+                >
+                  {newsTickerFilter.toUpperCase()}
+                </Badge>
+                <span className="text-[9px] text-muted-foreground">
+                  {filteredNews.length} matching
+                </span>
+              </div>
+            )}
+          </div>
+          <ScrollArea className="flex-1">
+            <div className="divide-y divide-border/50">
+              {loadingNews ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="p-3 space-y-2">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-4 w-full" />
+                    <Skeleton className="h-3 w-3/4" />
+                  </div>
+                ))
+              ) : filteredNews.length === 0 ? (
+                <div className="text-center py-8 text-xs text-muted-foreground">
+                  {newsTickerFilter
+                    ? `No news found for "${newsTickerFilter.toUpperCase()}"`
+                    : "No news available"}
+                </div>
+              ) : (
+                filteredNews.map((item) => (
+                  <NewsItem
+                    key={item.id}
+                    item={item}
+                    onClick={() => onNewsClick(item)}
+                  />
+                ))
+              )}
+            </div>
+          </ScrollArea>
+        </>
+      )}
+
+      {/* X Feed panel */}
+      {activeTab === "xfeed" && (
+        <div className="flex-1 overflow-hidden flex flex-col">
+          <XFeedPanel />
+        </div>
+      )}
+    </aside>
+  );
+}
+
+// ─── Main Dashboard ───────────────────────────────────────────────────────────
+
+export default function Dashboard() {
+  const [selectedSymbol, setSelectedSymbol] = useState("TSLA");
+  const [searchFilter, setSearchFilter] = useState("");
+  const [newsTickerFilter, setNewsTickerFilter] = useState("");
+  const [selectedNews, setSelectedNews] = useState<News | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
+  const [showUsaOnly, setShowUsaOnly] = useState(false);
+  const qc = useQueryClient();
+
+  const { data: tickers = [], isLoading: loadingTickers } = useQuery<Ticker[]>(
+    {
+      queryKey: ["/api/tickers"],
+      refetchInterval: 30000,
+      staleTime: 0,
+      refetchOnWindowFocus: true,
+    }
+  );
+
+  const { data: newsItems = [], isLoading: loadingNews } = useQuery<News[]>({
+    queryKey: ["/api/news"],
+    refetchInterval: 15000,
+    staleTime: 0,
+  });
+
+  const { data: earningsData = [] } = useQuery<Earning[]>({
+    queryKey: ["/api/earnings"],
+    refetchInterval: 60000,
+  });
+
+  const { data: macroEvents = [] } = useQuery<MacroEvent[]>({
+    queryKey: ["/api/macro"],
+    refetchInterval: 60000,
+  });
+
+  const { data: optionsFlowData = [] } = useQuery<OptionsFlow[]>({
+    queryKey: ["/api/options-flow"],
+    refetchInterval: 30000,
+    staleTime: 0,
+  });
+
+  // Track when tickers refresh
+  useEffect(() => {
+    if (tickers.length > 0) setLastRefresh(new Date());
+  }, [tickers]);
+
+  const handleManualRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await apiRequest("POST", "/api/refresh");
+      qc.invalidateQueries({ queryKey: ["/api/tickers"] });
+      qc.invalidateQueries({ queryKey: ["/api/news"] });
+      qc.invalidateQueries({ queryKey: ["/api/earnings"] });
+      qc.invalidateQueries({ queryKey: ["/api/macro"] });
+      qc.invalidateQueries({ queryKey: ["/api/options-flow"] });
+      qc.invalidateQueries({ queryKey: ["/api/tweets"] });
+    } catch {
+      /* silent */
+    }
+    await Promise.all([
+      qc.refetchQueries({ queryKey: ["/api/tickers"] }),
+      qc.refetchQueries({ queryKey: ["/api/news"] }),
+      qc.refetchQueries({ queryKey: ["/api/options-flow"] }),
+    ]);
+    setIsRefreshing(false);
+  }, [qc]);
+
+  const selectedTicker =
+    tickers.find((t) => t.symbol === selectedSymbol) || tickers[0];
+
+  const filteredStocks = useMemo(() => {
+    const filter = searchFilter.toUpperCase();
+    return tickers
+      .filter((t) => STOCK_SYMBOLS.includes(t.symbol))
+      .filter(
+        (t) =>
+          !filter ||
+          t.symbol.includes(filter) ||
+          t.name.toUpperCase().includes(filter)
+      )
+      .sort(
+        (a, b) =>
+          STOCK_SYMBOLS.indexOf(a.symbol) - STOCK_SYMBOLS.indexOf(b.symbol)
+      );
+  }, [tickers, searchFilter]);
+
+  const filteredETFs = useMemo(() => {
+    const filter = searchFilter.toUpperCase();
+    return tickers
+      .filter((t) => ETF_SYMBOLS.includes(t.symbol))
+      .filter(
+        (t) =>
+          !filter ||
+          t.symbol.includes(filter) ||
+          t.name.toUpperCase().includes(filter)
+      )
+      .sort(
+        (a, b) =>
+          ETF_SYMBOLS.indexOf(a.symbol) - ETF_SYMBOLS.indexOf(b.symbol)
+      );
+  }, [tickers, searchFilter]);
+
+  const activeStockSymbols = useMemo(() => {
+    return STOCK_SYMBOLS.filter((s) => tickers.some((t) => t.symbol === s));
+  }, [tickers]);
+
+  const filteredNews = useMemo(() => {
+    if (!newsTickerFilter) return newsItems;
+    const filter = newsTickerFilter.toUpperCase().trim();
+    return newsItems.filter((n) => {
+      if (
+        n.relatedTicker &&
+        n.relatedTicker.toUpperCase().includes(filter)
+      )
+        return true;
+      if (n.title.toUpperCase().includes(filter)) return true;
+      if (n.summary && n.summary.toUpperCase().includes(filter)) return true;
+      return false;
+    });
+  }, [newsItems, newsTickerFilter]);
+
+  if (loadingTickers) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-background">
+        <div className="text-center space-y-3">
+          <Activity className="w-8 h-8 text-primary animate-spin mx-auto" />
+          <p className="text-sm text-muted-foreground">Loading market data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="h-screen flex flex-col bg-background overflow-hidden"
+      data-testid="dashboard-root"
+    >
+      {/* ── Top Header Bar ── */}
+      <header className="flex items-center justify-between px-4 py-2 border-b border-border bg-card/60 backdrop-blur-sm z-10 shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <svg
+              viewBox="0 0 28 28"
+              className="w-6 h-6"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <rect
+                x="2"
+                y="14"
+                width="5"
+                height="12"
+                rx="1"
+                fill="hsl(var(--primary))"
+                opacity="0.7"
+              />
+              <rect
+                x="9"
+                y="8"
+                width="5"
+                height="18"
+                rx="1"
+                fill="hsl(var(--primary))"
+                opacity="0.85"
+              />
+              <rect
+                x="16"
+                y="2"
+                width="5"
+                height="24"
+                rx="1"
+                fill="hsl(var(--primary))"
+              />
+              <rect
+                x="23"
+                y="10"
+                width="5"
+                height="16"
+                rx="1"
+                fill="hsl(var(--chart-2))"
+                opacity="0.8"
+              />
+            </svg>
+            <span className="text-sm font-bold tracking-wider">OPTIONFLOW</span>
+          </div>
+          <Separator orientation="vertical" className="h-5 flex-shrink-0" />
+          <div className="min-w-0 overflow-hidden">
+            <MarketOverviewStrip tickers={tickers} />
+          </div>
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <button
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-50"
+            data-testid="btn-refresh"
+            title="Force refresh market data"
+          >
+            <RefreshCw
+              className={`w-3 h-3 ${isRefreshing ? "animate-spin" : ""}`}
+            />
+            <span className="hidden sm:inline">
+              {isRefreshing ? "Updating..." : "Refresh"}
+            </span>
+          </button>
+          <span className="text-[9px] text-muted-foreground/60 hidden sm:inline">
+            Auto-updates every 30s
+          </span>
+          <div className="flex items-center gap-1.5">
+            <Radio className="w-3 h-3 text-emerald-400 animate-pulse-dot" />
+            <span className="text-[10px] text-emerald-400 font-medium uppercase tracking-widest">
+              Live
+            </span>
+          </div>
+          <LiveClock />
+        </div>
+      </header>
+
+      {/* ── Main Content ── */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* ── Left Sidebar — Watchlist ── */}
+        <aside className="w-52 border-r border-border flex flex-col bg-sidebar/60 shrink-0">
+          <div className="px-3 py-2.5 border-b border-sidebar-border">
+            <h2 className="text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/60 mb-2">
+              Portfolio
+            </h2>
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
+              <Input
+                placeholder="Filter..."
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                className="h-7 text-xs pl-7 bg-sidebar-accent/50 border-sidebar-border"
+                data-testid="sidebar-search"
+              />
+            </div>
+          </div>
+          <ScrollArea className="flex-1">
+            <div className="p-2 space-y-1">
+              {filteredStocks.length > 0 && (
+                <>
+                  <div className="px-2 pt-1 pb-0.5">
+                    <span className="text-[9px] font-semibold uppercase tracking-widest text-sidebar-foreground/40">
+                      Stocks
+                    </span>
+                  </div>
+                  {filteredStocks.map((t) => (
+                    <TickerRow
+                      key={t.symbol}
+                      ticker={t}
+                      isSelected={selectedSymbol === t.symbol}
+                      onClick={() => setSelectedSymbol(t.symbol)}
+                    />
+                  ))}
+                </>
+              )}
+              {filteredETFs.length > 0 && (
+                <>
+                  <div className="px-2 pt-2 pb-0.5">
+                    <span className="text-[9px] font-semibold uppercase tracking-widest text-sidebar-foreground/40">
+                      ETFs
+                    </span>
+                  </div>
+                  {filteredETFs.map((t) => (
+                    <TickerRow
+                      key={t.symbol}
+                      ticker={t}
+                      isSelected={selectedSymbol === t.symbol}
+                      onClick={() => setSelectedSymbol(t.symbol)}
+                    />
+                  ))}
+                </>
+              )}
+              {filteredStocks.length === 0 && filteredETFs.length === 0 && (
+                <div className="text-center py-4 text-[10px] text-muted-foreground">
+                  No matches
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        </aside>
+
+        {/* ── Center — Main Dashboard ── */}
+        <main className="flex-1 overflow-y-auto overscroll-contain">
+          <div className="p-4 space-y-4 max-w-[1400px]">
+            {/* Selected Ticker Detail + Key Levels */}
+            {selectedTicker && (
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+                <div className="lg:col-span-3 space-y-4">
+                  <TickerDetail ticker={selectedTicker} />
+                  <GammaBar ticker={selectedTicker} />
+                </div>
+                <div className="lg:col-span-2">
+                  <KeyLevelsCard ticker={selectedTicker} />
+                </div>
+              </div>
+            )}
+
+            {/* Full Portfolio Key Levels Table */}
+            <AllKeyLevelsTable tickers={tickers} />
+
+            {/* Enhanced Options Flow Table */}
+            <OptionsFlowTable flowData={optionsFlowData} />
+
+            {/* Earnings Calendar */}
+            {earningsData.length > 0 && (
+              <EarningsCalendar
+                earningsData={earningsData}
+                stockSymbols={activeStockSymbols}
+              />
+            )}
+
+            {/* Macro Calendar */}
+            <MacroCalendar
+              events={macroEvents}
+              showUsaOnly={showUsaOnly}
+              onToggleUsaOnly={() => setShowUsaOnly(!showUsaOnly)}
+            />
+          </div>
+        </main>
+
+        {/* ── Right Sidebar — News + X Feed ── */}
+        <RightSidebar
+          newsItems={newsItems}
+          filteredNews={filteredNews}
+          newsTickerFilter={newsTickerFilter}
+          setNewsTickerFilter={setNewsTickerFilter}
+          loadingNews={loadingNews}
+          onNewsClick={(item) => setSelectedNews(item)}
+        />
+      </div>
+
+      {/* News Detail Modal */}
+      <NewsModal
+        item={selectedNews}
+        open={selectedNews !== null}
+        onClose={() => setSelectedNews(null)}
+      />
+    </div>
+  );
+}
