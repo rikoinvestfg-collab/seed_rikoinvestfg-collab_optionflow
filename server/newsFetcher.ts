@@ -3,6 +3,31 @@ import http from "http";
 import { storage } from "./storage";
 import type { InsertNews } from "@shared/schema";
 import { sendNewsToDiscord } from "./discordSender";
+import fs from "fs";
+import path from "path";
+
+// Persistent tracking of sent news IDs to Discord
+const SENT_NEWS_FILE = path.join(process.cwd(), "data", "sent_news_ids.json");
+
+function loadSentNewsIds(): Set<string> {
+  try {
+    if (fs.existsSync(SENT_NEWS_FILE)) {
+      return new Set(JSON.parse(fs.readFileSync(SENT_NEWS_FILE, "utf-8")));
+    }
+  } catch {}
+  return new Set();
+}
+
+function saveSentNewsIds(ids: Set<string>) {
+  try {
+    const dir = path.dirname(SENT_NEWS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const arr = [...ids].slice(-500);
+    fs.writeFileSync(SENT_NEWS_FILE, JSON.stringify(arr));
+  } catch {}
+}
+
+const sentNewsIds = loadSentNewsIds();
 
 const ALL_SYMBOLS = [
   "TSLA", "MSFT", "NVDA", "AAPL", "AMD", "NFLX", "GOOG", "AMZN",
@@ -204,7 +229,7 @@ const RSS_FEEDS: Array<{ url: string; source: string; parser?: "sitemap" }> = [
 
 let lastNewsFetchTime: Date | null = null;
 let newsFetchInProgress = false;
-let isFirstNewsFetch = true; // Skip Discord on first load to avoid spam on restart
+// Using persistent sentNewsIds set instead of isFirstNewsFetch flag
 
 export async function fetchLiveNews(): Promise<number> {
   if (newsFetchInProgress) {
@@ -296,8 +321,10 @@ export async function fetchLiveNews(): Promise<number> {
       existingTitles.add(titleKey);
       added++;
 
-      // Auto-send to Discord #news-feed (skip first load to avoid spam on restart)
-      if (!isFirstNewsFetch) {
+      // Auto-send to Discord #news-feed (persistent tracking prevents re-sends)
+      const newsKey = newsData.title.toLowerCase().substring(0, 80);
+      if (!sentNewsIds.has(newsKey)) {
+        sentNewsIds.add(newsKey);
         sendNewsToDiscord({
           title: newsData.title,
           summary: newsData.summary || "",
@@ -316,13 +343,11 @@ export async function fetchLiveNews(): Promise<number> {
   // Prune old news - keep latest 50
   pruneOldNews(50);
   
+  // Save persistent tracking
+  saveSentNewsIds(sentNewsIds);
+
   lastNewsFetchTime = new Date();
-  if (isFirstNewsFetch) {
-    console.log(`[newsFetcher] Initial load complete — ${added} new items. Discord sending starts next cycle.`);
-    isFirstNewsFetch = false;
-  } else {
-    console.log(`[newsFetcher] Added ${added} new items → ${added > 0 ? added + " sent to Discord" : "no Discord sends"} (${storage.getAllNews().length} total)`);
-  }
+  console.log(`[newsFetcher] Added ${added} new items (${storage.getAllNews().length} total)`);
   
   newsFetchInProgress = false;
   return added;

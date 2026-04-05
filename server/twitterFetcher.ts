@@ -279,11 +279,42 @@ function detectTweetSentiment(text: string): string {
   return "neutral";
 }
 
+import fs from "fs";
+import path from "path";
+
 // In-memory storage
 let allTweets: Tweet[] = [];
 let lastTweetFetchTime: Date | null = null;
 let tweetFetchInProgress = false;
-let isFirstTweetFetch = true; // Skip Discord on first load to avoid spam on restart
+
+// Persistent tracking of sent tweet IDs to avoid re-sending old tweets on server restart
+const SENT_TWEETS_FILE = path.join(process.cwd(), "data", "sent_tweet_ids.json");
+
+function loadSentTweetIds(): Set<string> {
+  try {
+    if (fs.existsSync(SENT_TWEETS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(SENT_TWEETS_FILE, "utf-8"));
+      return new Set(data);
+    }
+  } catch {}
+  return new Set();
+}
+
+function saveSentTweetIds(ids: Set<string>) {
+  try {
+    const dir = path.dirname(SENT_TWEETS_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Keep only last 500 IDs to prevent file from growing forever
+    const arr = [...ids].slice(-500);
+    fs.writeFileSync(SENT_TWEETS_FILE, JSON.stringify(arr));
+  } catch {}
+}
+
+function tweetKey(t: Tweet): string {
+  return (t.url + "|" + t.text.substring(0, 80)).toLowerCase();
+}
+
+const sentTweetIds = loadSentTweetIds();
 
 export async function fetchAllTweets(): Promise<number> {
   if (tweetFetchInProgress) return 0;
@@ -317,12 +348,20 @@ export async function fetchAllTweets(): Promise<number> {
   }
   
   if (newTweets.length > 0) {
-    const existingUrls = new Set(allTweets.map(t => t.url + t.text.substring(0, 50)));
-    const uniqueNew = newTweets.filter(t => !existingUrls.has(t.url + t.text.substring(0, 50)));
+    // Filter out already-seen tweets using persistent tracking (survives restarts)
+    const uniqueNew = newTweets.filter(t => !sentTweetIds.has(tweetKey(t)));
     
-    // Auto-send each new tweet to Discord #x-feed (skip first load to avoid spam on restart)
-    if (!isFirstTweetFetch) {
-      for (const tw of uniqueNew) {
+    // Only send tweets that are actually recent (within 6 hours) to Discord
+    const sixHoursAgo = Date.now() - 6 * 60 * 60 * 1000;
+    const recentNew = uniqueNew.filter(t => {
+      const ts = new Date(t.timestamp).getTime();
+      return !isNaN(ts) && ts > sixHoursAgo;
+    });
+    
+    // Send only truly new + recent tweets to Discord
+    if (recentNew.length > 0) {
+      console.log(`[twitterFetcher] Sending ${recentNew.length} new tweets to Discord`);
+      for (const tw of recentNew) {
         const ticker = detectTweetTicker(tw.text);
         const sentiment = detectTweetSentiment(tw.text);
         sendTweetToDiscord({
@@ -335,10 +374,13 @@ export async function fetchAllTweets(): Promise<number> {
           sentiment,
         }).catch(() => {});
       }
-    } else {
-      console.log(`[twitterFetcher] Skipping Discord send for initial load (${uniqueNew.length} tweets)`);
     }
-    isFirstTweetFetch = false;
+    
+    // Mark ALL fetched tweets as seen (even old ones) so they never get re-sent
+    for (const t of newTweets) {
+      sentTweetIds.add(tweetKey(t));
+    }
+    saveSentTweetIds(sentTweetIds);
     
     allTweets = [...uniqueNew, ...allTweets]
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
