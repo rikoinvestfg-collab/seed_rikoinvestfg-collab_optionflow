@@ -244,10 +244,13 @@ Responde solo con la explicación, sin introducción.`;
       temperature: 0.3,
     });
 
+    const _baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+    const _urlObj = new URL(_baseUrl.replace(/\/+$/, "") + "/chat/completions");
     const response = await new Promise<string>((resolve, reject) => {
       const options = {
-        hostname: "api.openai.com",
-        path:     "/v1/chat/completions",
+        hostname: _urlObj.hostname,
+        port:     _urlObj.port || 443,
+        path:     _urlObj.pathname,
         method:   "POST",
         headers: {
           "Content-Type":  "application/json",
@@ -465,10 +468,13 @@ Explica qu\u00E9 significa esta divergencia para un trader de opciones 0DTE y c\
       temperature: 0.3,
     });
 
+    const _baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com/v1";
+    const _urlObj = new URL(_baseUrl.replace(/\/+$/, "") + "/chat/completions");
     const response = await new Promise<string>((resolve, reject) => {
       const options = {
-        hostname: "api.openai.com",
-        path:     "/v1/chat/completions",
+        hostname: _urlObj.hostname,
+        port:     _urlObj.port || 443,
+        path:     _urlObj.pathname,
         method:   "POST",
         headers: {
           "Content-Type":  "application/json",

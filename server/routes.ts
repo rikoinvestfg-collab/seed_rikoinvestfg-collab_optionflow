@@ -15,12 +15,13 @@ import { fetchHistoricalOHLCV, getValidIntervals } from "./historicalData";
 import { startInstitutionalRefresh, getInstitutionalFlow, getDarkPoolPrints, getTickerExposures, getLastInstitutionalFetchTime } from "./institutionalFetcher";
 import { initFlowIntelligence, getFlowIntelReports, getLastIntelTime } from "./flowIntelligence";
 import { registerClub5amRoutes } from "./club5am";
+import { startCboeRefresh, fetchCboeGexData, getLastCboeFetchTime } from "./cboeFetcher";
 
 export function registerRoutes(server: Server, app: Express) {
   // Start all auto-refresh cycles
   startLiveDataRefresh(60000);       // quotes every 60s
   startNewsRefresh(120000);           // news every 2 minutes
-  startMacroRefresh(300000);          // macro every 5 minutes
+  startMacroRefresh(120000);          // macro every 2 minutes — more real-time
   startEarningsRefresh(600000);       // earnings every 10 minutes
   startOptionsFlowRefresh(120000);    // options flow every 2 minutes
   startTweetRefresh(180000);          // tweets every 3 minutes
@@ -29,6 +30,7 @@ export function registerRoutes(server: Server, app: Express) {
   initMacroVerifier(storage);          // macro data auto-verifier every 60 seconds
   startInstitutionalRefresh(120000);    // institutional/dark pool every 2 minutes
   initFlowIntelligence();                // Flow Intelligence AI engine every 60 seconds
+  startCboeRefresh(300000);               // CBOE free GEX key levels every 5 min
   registerClub5amRoutes(app);             // Club 5 AM mentor chat + wisdom cards
 
   app.get("/api/tickers", (_req, res) => {
@@ -63,10 +65,15 @@ export function registerRoutes(server: Server, app: Express) {
   });
 
   app.get("/api/macro", (_req, res) => {
+    // No cache — macro actuals update in real-time when data releases
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
     res.json(storage.getAllMacroEvents());
   });
 
   app.get("/api/options-flow", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
     const data = storage.getAllOptionsFlow();
     data.sort((a, b) => b.id - a.id);
     res.json(data);
@@ -81,19 +88,57 @@ export function registerRoutes(server: Server, app: Express) {
   // ─── Institutional Flow / Dark Pool / Exposure ────────────────────────────────
 
   app.get("/api/institutional-flow", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
     res.json(getInstitutionalFlow());
   });
 
   app.get("/api/dark-pool", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
     res.json(getDarkPoolPrints());
   });
 
   app.get("/api/exposure", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
     res.json(getTickerExposures());
+  });
+
+  // CBOE GEX — status + manual trigger (same URL kept for backward compat)
+  app.get("/api/option-whales/status", (_req, res) => {
+    const tickers = storage.getAllTickers();
+    const withLevels = tickers.filter((t) => t.gammaFlip || t.netGex);
+    res.json({
+      source: "CBOE Free Options Chain (calculated)",
+      lastFetch: getLastCboeFetchTime()?.toISOString() || null,
+      tickersWithLevels: withLevels.length,
+      sample: withLevels.slice(0, 5).map((t) => ({
+        symbol: t.symbol,
+        gammaFlip: t.gammaFlip,
+        maxPain: t.maxPain,
+        callWall: t.callWall,
+        putWall: t.putWall,
+        gammaRegime: t.gammaRegime,
+        netGex: t.netGex,
+        atmIv: t.atmIv,
+      })),
+    });
+  });
+
+  app.post("/api/option-whales/refresh", async (_req, res) => {
+    try {
+      const ok = await fetchCboeGexData();
+      res.json({ success: ok, lastFetch: getLastCboeFetchTime()?.toISOString() || null });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Flow Intelligence
   app.get("/api/flow-intelligence", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    res.setHeader("Pragma", "no-cache");
     res.json({
       reports: getFlowIntelReports(),
       lastAnalysis: getLastIntelTime()?.toISOString() || null,
@@ -110,6 +155,7 @@ export function registerRoutes(server: Server, app: Express) {
       lastEarningsUpdate: getLastEarningsFetchTime()?.toISOString() || null,
       lastFlowUpdate: getLastFlowFetchTime()?.toISOString() || null,
       lastTweetUpdate: getLastTweetFetchTime()?.toISOString() || null,
+      lastOptionWhalesUpdate: getLastCboeFetchTime()?.toISOString() || null,
       tickerCount: storage.getAllTickers().length,
       newsCount: storage.getAllNews().length,
       macroCount: storage.getAllMacroEvents().length,

@@ -382,7 +382,8 @@ function TickerNewsModal({
     queryFn: () => apiRequest("GET", `/api/news-sentiment/${ticker}`).then(r => r.json()),
     enabled: open && !!ticker,
     refetchInterval: 30000,
-    staleTime: 10000,
+    staleTime: 0,
+    refetchIntervalInBackground: true,
   });
 
   const [selectedNews, setSelectedNews] = useState<News | null>(null);
@@ -1734,7 +1735,7 @@ const INST_FLOW_LEGEND = [
   { term: "EXCH", desc: "Exchange donde se ejecutó. NYSE/NASDAQ = mercado abierto. CBOE/ISE/PHLX = exchanges de opciones. IEX = exchange con protección anti-HFT." },
 ];
 
-function InstitutionalFlowPanel({ institutionalFlow }: { institutionalFlow: InstitutionalSignalUI[] }) {
+function InstitutionalFlowPanel({ institutionalFlow, lastUpdated }: { institutionalFlow: InstitutionalSignalUI[]; lastUpdated?: number }) {
   const [activeTab, setActiveTab] = useState<"equity" | "options">("equity");
   const [tickerFilter, setTickerFilter] = useState("");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
@@ -1773,8 +1774,19 @@ function InstitutionalFlowPanel({ institutionalFlow }: { institutionalFlow: Inst
           <Shield className="w-4 h-4 text-amber-400" />
           <h3 className="text-sm font-bold text-[hsl(var(--foreground))]">Institutional Flow</h3>
           <span className="text-[10px] px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded font-mono">{institutionalFlow.length} signals</span>
+          {/* Live pulse */}
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[9px] text-emerald-400 font-mono uppercase tracking-widest">Live</span>
+          </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Last updated timestamp */}
+          {lastUpdated && (
+            <span className="text-[9px] text-[hsl(var(--muted-foreground))] font-mono tabular-nums">
+              Actualizado: {new Date(lastUpdated).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true, timeZone: "America/New_York" })} ET
+            </span>
+          )}
           {/* Legend toggle */}
           <div className="relative" ref={legendRef}>
             <button
@@ -2032,7 +2044,7 @@ const EXPOSURE_STRATEGY_TIPS = [
   { title: "🔄 Dark Pool Feed en tiempo real", desc: "Monitorea los block trades (>10K shares) en el feed. Una ráfaga de blocks en una dirección (todos ABOVE o todos BELOW VWAP) indica que una institución está construyendo una posición grande. Sigue al dinero grande." },
 ];
 
-function ExposureDashboard({ exposures, darkPoolPrints }: { exposures: TickerExposureUI[]; darkPoolPrints: DarkPoolPrintUI[] }) {
+function ExposureDashboard({ exposures, darkPoolPrints, lastUpdated }: { exposures: TickerExposureUI[]; darkPoolPrints: DarkPoolPrintUI[]; lastUpdated?: number }) {
   const [activeTab, setActiveTab] = useState<"summary" | "darkpool">("summary");
   const [sortCol, setSortCol] = useState<string>("sentimentScore");
   const [sortAsc, setSortAsc] = useState(false);
@@ -2094,8 +2106,19 @@ function ExposureDashboard({ exposures, darkPoolPrints }: { exposures: TickerExp
           <Activity className="w-4 h-4 text-purple-400" />
           <h3 className="text-sm font-bold text-[hsl(var(--foreground))]">Dark Pool + Flow Exposure</h3>
           <span className="text-[10px] px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded font-mono">{exposures.length} tickers</span>
+          {/* Live pulse */}
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[9px] text-emerald-400 font-mono uppercase tracking-widest">Live</span>
+          </span>
         </div>
         <div className="flex items-center gap-2">
+          {/* Last updated timestamp */}
+          {lastUpdated && (
+            <span className="text-[9px] text-[hsl(var(--muted-foreground))] font-mono tabular-nums">
+              Actualizado: {new Date(lastUpdated).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true, timeZone: "America/New_York" })} ET
+            </span>
+          )}
           {/* Legend toggle */}
           <div className="relative" ref={legendRef}>
             <button
@@ -2355,9 +2378,9 @@ function ExposureDashboard({ exposures, darkPoolPrints }: { exposures: TickerExp
 // ─── Flow Intelligence Table ──────────────────────────────────────────────────
 
 function FlowIntelligenceTable({
-  flowData, allTickers,
+  flowData, allTickers, lastUpdated,
 }: {
-  flowData: OptionsFlow[]; allTickers: Ticker[];
+  flowData: OptionsFlow[]; allTickers: Ticker[]; lastUpdated?: number;
 }) {
   const [activeTab, setActiveTab] = useState<"abnormal" | "accumulation" | "momentum" | "ai">("abnormal");
   const [selectedFlow, setSelectedFlow] = useState<OptionsFlow | null>(null);
@@ -2557,6 +2580,16 @@ function FlowIntelligenceTable({
           <Badge variant="outline" className="text-[9px] border-amber-500/30 text-amber-400 bg-amber-500/10 ml-auto">
             {filteredFlow.length}{tickerFilter ? `/${flowData.length}` : ""} signals
           </Badge>
+          {/* Live pulse + timestamp */}
+          <span className="flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="text-[9px] text-emerald-400 font-mono uppercase tracking-widest">Live</span>
+          </span>
+          {lastUpdated ? (
+            <span className="text-[9px] text-muted-foreground font-mono tabular-nums">
+              {new Date(lastUpdated).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true, timeZone: "America/New_York" })} ET
+            </span>
+          ) : null}
           {/* Leyenda toggle */}
           <div className="relative" ref={legendRef}>
             <button
@@ -3481,30 +3514,34 @@ export default function Dashboard() {
     staleTime: 0,
   });
 
-  const { data: institutionalFlow = [] } = useQuery<any[]>({
+  const { data: institutionalFlow = [], dataUpdatedAt: instUpdatedAt } = useQuery<any[]>({
     queryKey: ["/api/institutional-flow"],
     queryFn: () => apiRequest("GET", "/api/institutional-flow").then(r => r.json()),
-    refetchInterval: 60000,
-    staleTime: 30000,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
   });
 
-  const { data: darkPoolPrints = [] } = useQuery<any[]>({
+  const { data: darkPoolPrints = [], dataUpdatedAt: dpUpdatedAt } = useQuery<any[]>({
     queryKey: ["/api/dark-pool"],
     queryFn: () => apiRequest("GET", "/api/dark-pool").then(r => r.json()),
-    refetchInterval: 60000,
-    staleTime: 30000,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
   });
 
-  const { data: tickerExposures = [] } = useQuery<any[]>({
+  const { data: tickerExposures = [], dataUpdatedAt: expUpdatedAt } = useQuery<any[]>({
     queryKey: ["/api/exposure"],
     queryFn: () => apiRequest("GET", "/api/exposure").then(r => r.json()),
-    refetchInterval: 60000,
-    staleTime: 30000,
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
+    staleTime: 0,
   });
 
-  const { data: optionsFlowData = [] } = useQuery<OptionsFlow[]>({
+  const { data: optionsFlowData = [], dataUpdatedAt: flowUpdatedAt } = useQuery<OptionsFlow[]>({
     queryKey: ["/api/options-flow"],
     refetchInterval: 30000,
+    refetchIntervalInBackground: true,
     staleTime: 0,
   });
 
@@ -3520,6 +3557,10 @@ export default function Dashboard() {
         qc.refetchQueries({ queryKey: ["/api/tickers"] }),
         qc.refetchQueries({ queryKey: ["/api/news"] }),
         qc.refetchQueries({ queryKey: ["/api/options-flow"] }),
+        qc.refetchQueries({ queryKey: ["/api/institutional-flow"] }),
+        qc.refetchQueries({ queryKey: ["/api/dark-pool"] }),
+        qc.refetchQueries({ queryKey: ["/api/exposure"] }),
+        qc.refetchQueries({ queryKey: ["/api/flow-intelligence"] }),
       ]);
     } catch { /* silent */ }
     setIsRefreshing(false);
@@ -3724,13 +3765,13 @@ export default function Dashboard() {
             <AllKeyLevelsTable tickers={tickers} />
 
             {/* Flow Intelligence (renamed from Options Flow) */}
-            <FlowIntelligenceTable flowData={optionsFlowData} allTickers={tickers} />
+            <FlowIntelligenceTable flowData={optionsFlowData} allTickers={tickers} lastUpdated={flowUpdatedAt} />
 
             {/* Institutional Flow (Smart Money) */}
-            <InstitutionalFlowPanel institutionalFlow={institutionalFlow} />
+            <InstitutionalFlowPanel institutionalFlow={institutionalFlow} lastUpdated={instUpdatedAt} />
 
             {/* Dark Pool + Flow + Sentiment + GEX/DEX + Expected Move */}
-            <ExposureDashboard exposures={tickerExposures} darkPoolPrints={darkPoolPrints} />
+            <ExposureDashboard exposures={tickerExposures} darkPoolPrints={darkPoolPrints} lastUpdated={expUpdatedAt} />
 
 
           </div>

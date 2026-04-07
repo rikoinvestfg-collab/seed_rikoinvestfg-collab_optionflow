@@ -277,18 +277,18 @@ async function notifyDiscord(ev: any, source: string) {
   };
 
   // Send to #macro-noticias
-  await postWebhook(MACRO_WEBHOOK, { embeds: [embed] });
+  if (false) await postWebhook(MACRO_WEBHOOK, { embeds: [embed] });
 
   // If critical beat/miss (>10% deviation), also send to #alertas-criticas
   if (!isNaN(actNum) && !isNaN(estNum) && estNum !== 0) {
     const deviation = Math.abs((actNum - estNum) / Math.abs(estNum)) * 100;
     if (deviation > 10) {
-      await postWebhook(CRITICAL_WEBHOOK, {
+      if (false) await postWebhook(CRITICAL_WEBHOOK, {
         content: `@here — **DATO MACRO CRÍTICO: ${eventName}** → ${actual} vs ${forecast} est. (${beat ? "+" : "-"}${deviation.toFixed(0)}%)`,
         embeds: [embed],
       });
       // Also ping signals channel
-      await postWebhook(SIGNALS_WEBHOOK, {
+      if (false) await postWebhook(SIGNALS_WEBHOOK, {
         content: `⚠️ **Dato macro de alto impacto acaba de salir** — ${eventName}: **${actual}** (est. ${forecast}) — Revisar posiciones en SPX/SPY/QQQ`,
         embeds: [],
       });

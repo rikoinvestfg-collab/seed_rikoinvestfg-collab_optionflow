@@ -473,7 +473,9 @@ export default function MacroPage() {
   const { data: macroEvents = [] } = useQuery<MacroEvent[]>({
     queryKey: ["/api/macro"],
     queryFn: () => apiRequest("GET", "/api/macro").then(r => r.json()),
-    refetchInterval: 60000,
+    refetchInterval: 30000,       // poll every 30s for live actuals
+    refetchIntervalInBackground: true, // keep polling even when tab is not focused
+    staleTime: 0,                  // always consider data stale so it refetches
   });
 
   return (

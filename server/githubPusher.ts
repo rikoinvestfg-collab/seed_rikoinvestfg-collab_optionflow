@@ -11,7 +11,7 @@
 
 import https from "https";
 
-const GITHUB_TOKEN = "GITHUB_TOKEN_PLACEHOLDER";
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN || "";
 const PINE_SEEDS_REPO = "rikoinvestfg-collab/seed_rikoinvestfg-collab_optionflow";
 const PUSH_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 

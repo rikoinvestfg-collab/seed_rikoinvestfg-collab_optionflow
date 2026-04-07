@@ -136,6 +136,8 @@ export default function ChartPage() {
   const { data: allLevels } = useQuery<Record<string, LevelsData>>({
     queryKey: ["/api/levels"],
     refetchInterval: 15000,
+    staleTime: 0,
+    refetchIntervalInBackground: true,
   });
 
   // Fetch historical OHLCV data
@@ -145,8 +147,9 @@ export default function ChartPage() {
       const res = await apiRequest("GET", `/api/history/${selectedTicker}?interval=${selectedInterval}`);
       return res.json();
     },
-    refetchInterval: selectedInterval === "1min" ? 60000 : selectedInterval === "5min" ? 120000 : 300000,
-    staleTime: 30000,
+    refetchInterval: selectedInterval === "1min" ? 30000 : selectedInterval === "5min" ? 60000 : 120000,
+    staleTime: 0,
+    refetchIntervalInBackground: true,
   });
 
   // Fetch TV export string
@@ -159,8 +162,9 @@ export default function ChartPage() {
   const { data: allExposures = [] } = useQuery<any[]>({
     queryKey: ["/api/exposure"],
     queryFn: () => apiRequest("GET", "/api/exposure").then(r => r.json()),
-    refetchInterval: 60000,
-    staleTime: 30000,
+    refetchInterval: 30000,
+    staleTime: 0,
+    refetchIntervalInBackground: true,
   });
   const tickerExposure = allExposures.find((e: any) => e.symbol === selectedTicker);
 

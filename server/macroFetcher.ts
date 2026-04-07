@@ -222,6 +222,10 @@ const KNOWN_ACTUALS: Record<string, { actual: string; forecast: string; previous
   "2026-04-03|unemployment rate":          { actual: "4.3%",   forecast: "4.4%",  previous: "4.4%" },
   "2026-04-03|average hourly earnings m/m": { actual: "0.2%",  forecast: "0.3%",  previous: "0.4%" },
   "2026-04-03|ism services pmi":           { actual: "50.8",   forecast: "53.0",  previous: "53.5" },
+  // April 6 — ISM Services PMI (released Monday Apr 7 but referenced as Apr 6 event)
+  "2026-04-06|ism services pmi":           { actual: "50.8",   forecast: "54.8",  previous: "53.5" },
+  // April 7 — RBA Rate Decision
+  "2026-04-07|rba rate decision":          { actual: "4.10%",  forecast: "4.10%", previous: "4.10%" },
 };
 
 function enrichWithKnownActuals(events: RawMacroEvent[]): void {
@@ -243,9 +247,18 @@ function enrichWithKnownActuals(events: RawMacroEvent[]): void {
 // ── Primary: FairEconomy/ForexFactory JSON API ───────────────────────────────
 async function fetchFromFairEconomy(): Promise<RawMacroEvent[]> {
   const events: RawMacroEvent[] = [];
+  const seen = new Set<string>();
 
+  // Fetch both this week AND last week to get freshest actuals
+  const urls = [
+    "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+    "https://nfs.faireconomy.media/ff_calendar_lastweek.json",
+    "https://nfs.faireconomy.media/ff_calendar_nextweek.json",
+  ];
+
+  for (const url of urls) {
   try {
-    const raw = await httpGet("https://nfs.faireconomy.media/ff_calendar_thisweek.json");
+    const raw = await httpGet(url);
     if (!raw || raw.length < 50 || raw.includes("Rate Limited") || raw.includes("<!DOCTYPE")) return events;
 
     const data = JSON.parse(raw) as Array<{
@@ -287,12 +300,31 @@ async function fetchFromFairEconomy(): Promise<RawMacroEvent[]> {
       });
     }
 
-    console.log(`[macroFetcher] FairEconomy: ${events.length} high-impact US/JP events`);
+    // Deduplicate
+    for (const ev of events) {
+      const k = `${ev.country}-${ev.event}-${ev.date}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+      }
+    }
   } catch (err: any) {
-    console.log("[macroFetcher] FairEconomy error:", err.message?.substring(0, 100));
+    console.log(`[macroFetcher] FairEconomy (${url}) error:`, err.message?.substring(0, 100));
+  }
+  } // end for urls
+
+  // Deduplicate final events
+  const final: RawMacroEvent[] = [];
+  const finalSeen = new Set<string>();
+  for (const ev of events) {
+    const k = `${ev.country}-${ev.event}-${ev.date}`;
+    if (!finalSeen.has(k)) {
+      finalSeen.add(k);
+      final.push(ev);
+    }
   }
 
-  return events;
+  console.log(`[macroFetcher] FairEconomy multi-week: ${final.length} high-impact US/JP events`);
+  return final;
 }
 
 // ── Comprehensive US Economic Calendar 2026 ──────────────────────────────────
@@ -607,6 +639,19 @@ export async function fetchMacroCalendar(): Promise<number> {
     console.log(`[macroFetcher] Total: ${events.length} events (${feEvents.length} live + ${events.length - feEvents.length} calendar)`);
 
     if (events.length > 0) {
+      // ── CRITICAL: Preserve existing actuals before clearing ──
+      // The macroVerifier writes actuals directly to the DB via updateMacroEventActual.
+      // If we clear + re-insert without preserving them, those actuals get wiped every 5 min.
+      const existingEvents = storage.getAllMacroEvents();
+      const existingActuals = new Map<string, { actual: string | null; forecast: string | null; previous: string | null }>();
+      for (const ex of existingEvents) {
+        if (ex.actual && ex.actual.trim() !== "") {
+          // Key: country-event-date (normalize event name)
+          const key = `${ex.country}-${ex.event}-${ex.date}`;
+          existingActuals.set(key, { actual: ex.actual, forecast: ex.forecast, previous: ex.previous });
+        }
+      }
+
       storage.clearAllMacroEvents();
 
       let added = 0;
@@ -620,6 +665,14 @@ export async function fetchMacroCalendar(): Promise<number> {
         const key = `${ev.country}-${ev.event}-${ev.date}`;
         if (seen.has(key)) continue;
         seen.add(key);
+
+        // Restore previously confirmed actual if the new event doesn't have one
+        const savedData = existingActuals.get(key);
+        if (savedData) {
+          if (!ev.actual || ev.actual.trim() === "") ev.actual = savedData.actual || "";
+          if (!ev.forecast || ev.forecast.trim() === "") ev.forecast = savedData.forecast || "";
+          if (!ev.previous || ev.previous.trim() === "") ev.previous = savedData.previous || "";
+        }
 
         try {
           storage.addMacroEvent({

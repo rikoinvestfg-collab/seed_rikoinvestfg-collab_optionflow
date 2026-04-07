@@ -4,6 +4,9 @@
  */
 
 import https from "https";
+import http  from "http";
+import FormData from "form-data";
+import { generateSignalImage } from "./signalScreenshot";
 
 // ── Webhook URLs ─────────────────────────────────────────────────────────────
 const WEBHOOKS = {
@@ -57,12 +60,61 @@ function postToDiscord(url: string, payload: object): Promise<void> {
   });
 }
 
+// ── HTTP helper for multipart/form-data (image uploads) ──────────────────────
+function postImageToDiscord(webhookUrl: string, imgBuffer: Buffer, payload: object): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("file", imgBuffer, { filename: "signal.png", contentType: "image/png" });
+    form.append("payload_json", JSON.stringify(payload));
+
+    const parsed = new URL(webhookUrl);
+    const lib    = parsed.protocol === "https:" ? https : http;
+
+    const options = {
+      method:   "POST",
+      hostname: parsed.hostname,
+      path:     parsed.pathname + parsed.search,
+      headers:  {
+        ...form.getHeaders(),
+        "User-Agent": "Mozilla/5.0 OptionFlowBot/1.0",
+      },
+    };
+
+    const req = lib.request(options, (res) => {
+      res.resume();
+      res.on("end", resolve);
+    });
+    req.on("error", reject);
+    form.pipe(req);
+  });
+}
+
 // ── Emoji helpers ────────────────────────────────────────────────────────────
 function signalEmoji(s: SignalType)  { return s === "ALCISTA" ? "🟢" : s === "BAJISTA" ? "🔴" : "🟡"; }
-function signalColor(s: SignalType)  { return s === "ALCISTA" ? 0x00FF88 : s === "BAJISTA" ? 0xFF3333 : 0xFFCC00; }
-function confidenceBar(c: number)    {
-  const filled = Math.round(c / 10);
-  return "█".repeat(filled) + "░".repeat(10 - filled) + ` ${c}%`;
+function signalColor(s: SignalType)  { return s === "ALCISTA" ? 0x00C9A7 : s === "BAJISTA" ? 0xFF4444 : 0xFFCC00; }
+
+// Map signal + score to OptionWhales-style label
+function signalLabel(s: SignalType, score: number): string {
+  if (s === "ALCISTA") return score >= 4 ? "Gamma Bull 🔥" : "Gamma Bull";
+  if (s === "BAJISTA") return score >= 4 ? "Gamma Bear 🔥" : "Gamma Bear";
+  return "Gamma Neutral";
+}
+
+// Confidence label — OptionWhales style
+function confidenceLabel(c: number): string {
+  if (c >= 80) return "High ↑Accel";
+  if (c >= 60) return "Medium →Stable";
+  return "Low ↓Fade";
+}
+
+// NY time string HH:MM ET
+function nyTime(): string {
+  return new Date().toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    hour:     "2-digit",
+    minute:   "2-digit",
+    hour12:   false,
+  }) + " ET";
 }
 
 // ── Get current NY session label ─────────────────────────────────────────────
@@ -79,71 +131,74 @@ export function getNYSession(): string {
   return "CERRADO";
 }
 
-// ── Main send function ────────────────────────────────────────────────────────
+// ── Main send function — OptionWhales style ──────────────────────────────────
 export async function sendSignal(sig: DiscordSignal): Promise<void> {
-  const emoji    = signalEmoji(sig.signal);
-  const color    = signalColor(sig.signal);
-  const sessionBadge = sig.session === "MERCADO" ? "🔔 MERCADO ABIERTO" :
-                       sig.session === "PRE-MARKET" ? "🌅 PRE-MARKET" :
-                       sig.session === "POST-MARKET" ? "🌙 POST-MARKET" : "💤 CERRADO";
+  const emoji  = signalEmoji(sig.signal);
+  const color  = signalColor(sig.signal);
+  const label  = signalLabel(sig.signal, sig.score);
+  const conf   = confidenceLabel(sig.confidence);
+  const time   = nyTime();
 
-  const priceVsGF = sig.price > sig.gammaFlip
-    ? `${sig.price} > GF ${sig.gammaFlip} ✅ SOBRE`
-    : `${sig.price} < GF ${sig.gammaFlip} ⛔ BAJO`;
+  // ── Detect expiry context (0DTE = today) ──────────────────────────────────
+  const now    = new Date();
+  const ny     = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
+  const mm     = String(ny.getMonth() + 1).padStart(2, "0");
+  const dd     = String(ny.getDate()).padStart(2, "0");
+  const expiry = `${mm}/${dd}`; // 0DTE expiry
 
-  const newsLines = sig.topNews.length > 0
-    ? sig.topNews.slice(0, 3).map((n, i) => `> ${i + 1}. ${n}`).join("\n")
-    : "> Sin noticias relevantes";
+  // ── Build flow line (OptionWhales contract style) ─────────────────────────
+  // Example: "SPY 4/17 $622P 12,000×$1.83 $2.2M"
+  const flowLine = sig.flowSummary
+    ? sig.flowSummary.split("\n")[0]   // take first flow line
+    : `${sig.ticker} ${expiry} — sin flujo disponible`;
+
+  // ── News summary (compact) ─────────────────────────────────────────────────
+  const newsLine = sig.topNews.length > 0
+    ? sig.topNews[0].substring(0, 90)
+    : "";
+
+  // ── Gamma levels line ─────────────────────────────────────────────────────
+  const gfArrow = sig.price > sig.gammaFlip ? "↑ SOBRE GF" : "↓ BAJO GF";
+  const levelsLine =
+    `GF $${sig.gammaFlip}  •  Call Wall $${sig.callWall}  •  Put Wall $${sig.putWall}  •  Max Pain $${sig.maxPain}`;
+
+  // ── Build description (OptionWhales clean style) ──────────────────────────
+  const lines: string[] = [
+    `Live intraday pulse  •  Score ${sig.score}/4  •  ${sig.session}`,
+    "",
+    `${emoji} **$${sig.ticker}** — ${label}`,
+    `Confidence: **${conf}**`,
+    `Price: **$${sig.price}** (${gfArrow})`,
+    `\`${flowLine}\``,
+  ];
+
+  if (newsLine) lines.push(`📰 ${newsLine}`);
+  if (sig.macroEvent) lines.push(`⚠️ Macro: ${sig.macroEvent}`);
+  lines.push("");
+  lines.push(`📍 ${levelsLine}`);
+  if (sig.aiReason) lines.push("", `> ${sig.aiReason}`);
 
   const embed = {
-    title:       `${emoji} ${sig.signal} — ${sig.ticker}  |  Score ${sig.score}/4`,
+    title:       `⚡ Option Flow Intent — ${time}`,
     color,
-    description: `**${sessionBadge}**\n\n${sig.aiReason}`,
-    fields: [
-      {
-        name:   "📊 Precio vs Niveles",
-        value:  `\`\`\`\nPrecio:     ${sig.price}\nGamma Flip: ${sig.gammaFlip}  →  ${priceVsGF.split("→")[1]?.trim()}\nMax Pain:   ${sig.maxPain}\nCall Wall:  ${sig.callWall}\nPut Wall:   ${sig.putWall}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name:   "🌊 Options Flow",
-        value:  `\`\`\`\n${sig.flowSummary || "Sin flujos significativos"}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name:   "📰 Noticias Relevantes",
-        value:  newsLines,
-        inline: false,
-      },
-      {
-        name:   "📅 Macro",
-        value:  sig.macroEvent ? `> ⚠️ ${sig.macroEvent}` : "> Sin eventos macro de alto impacto",
-        inline: false,
-      },
-      {
-        name:   "🎯 Confianza",
-        value:  `\`${confidenceBar(sig.confidence)}\``,
-        inline: false,
-      },
-    ],
+    description: lines.join("\n"),
     footer: {
-      text: `OptionFlow Agent  •  ${new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false })} ET`,
+      text: `OptionFlow  •  ${time}`,
     },
     timestamp: new Date().toISOString(),
   };
 
-  // Always send to #señales-generales
-  await postToDiscord(WEBHOOKS.signals, { embeds: [embed] });
+  if (false) await postToDiscord(WEBHOOKS.signals, { embeds: [embed] });
 
-  // Send to #alertas-criticas only if critical (score=4 or GF cross)
+  // Critical alert
   if (sig.isCritical) {
     const critEmbed = {
       ...embed,
-      title: `🚨 CRÍTICO — ${sig.signal}  ${sig.ticker}  |  Score ${sig.score}/4`,
+      title: `🚨 ALERTA CRÍTICA — $${sig.ticker}  |  Score ${sig.score}/4`,
       color: sig.signal === "ALCISTA" ? 0x00FF00 : 0xFF0000,
     };
-    await postToDiscord(WEBHOOKS.critical, {
-      content: `@here — **Confluencia crítica detectada en ${sig.ticker}**`,
+    if (false) await postToDiscord(WEBHOOKS.critical, {
+      content: `@here — **Confluencia crítica detectada en $${sig.ticker}**`,
       embeds:  [critEmbed],
     });
   }
@@ -171,7 +226,7 @@ export async function sendMacroAlert(event: {
     footer:    { text: `OptionFlow Agent  •  ${new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false })} ET` },
     timestamp: new Date().toISOString(),
   };
-  await postToDiscord(WEBHOOKS.macro, { embeds: [embed] });
+  if (false) await postToDiscord(WEBHOOKS.macro, { embeds: [embed] });
 }
 
 // ── Send Dark Pool vs Price divergence alert ──────────────────────────────────
@@ -190,53 +245,42 @@ export interface DarkPoolDivergenceSignal {
 }
 
 export async function sendDarkPoolDivergence(sig: DarkPoolDivergenceSignal): Promise<void> {
-  const sessionBadge = sig.session === "MERCADO" ? "\u{1F514} MERCADO ABIERTO" :
-                       sig.session === "PRE-MARKET" ? "\u{1F305} PRE-MARKET" :
-                       sig.session === "POST-MARKET" ? "\u{1F319} POST-MARKET" : "\u{1F4A4} CERRADO";
+  const time   = nyTime();
+  const pctStr = `${sig.changePercent > 0 ? "+" : ""}${sig.changePercent.toFixed(2)}%`;
+
+  const lines: string[] = [
+    `Live intraday pulse  •  Divergencia Institucional  •  ${sig.session}`,
+    "",
+    `🟣 **$${sig.ticker}** — Dark Pool Accumulation`,
+    `Confidence: **High ↑Accel**`,
+    `Price: **$${sig.price}** (${pctStr}) ↓ BAJANDO`,
+    `\`DP Above VWAP: ${sig.darkPoolBullPct.toFixed(0)}%  •  Blocks buy: ${sig.darkPoolBlocksBuy}  •  Notional: ${sig.totalDPNotional}\``,
+    "",
+    `🏦 **Top Prints:**`,
+    `\`${sig.topPrints || "Sin prints destacados"}\``,
+  ];
+
+  if (sig.aiReason) lines.push("", `> ${sig.aiReason}`);
+  lines.push("", `> ⚠️ Cuando el precio baja PERO el Dark Pool muestra compra agresiva (ABOVE VWAP), las instituciones están acumulando en el dip.`);
 
   const embed = {
-    title:       `\u{1F3E6} DARK POOL vs PRECIO \u2014 ${sig.ticker}  |  Acumulaci\u00F3n Detectada`,
-    color:       0x7B61FF, // purple for contrarian
-    description: `**${sessionBadge}**\n\n${sig.aiReason}`,
-    fields: [
-      {
-        name:   "\u{1F4C9} Precio",
-        value:  `\`\`\`\nPrecio: $${sig.price}  (${sig.changePercent > 0 ? "+" : ""}${sig.changePercent.toFixed(2)}%)\nEl precio BAJA pero las instituciones COMPRAN\n\`\`\``,
-        inline: false,
-      },
-      {
-        name:   "\u{1F3E6} Dark Pool Activity",
-        value:  `\`\`\`\nPrints ABOVE VWAP: ${sig.darkPoolBullPct.toFixed(0)}%\nBlocks compra:     ${sig.darkPoolBlocksBuy}\nBlocks venta:      ${sig.darkPoolBlocksSell}\nNotional total:    ${sig.totalDPNotional}\nNet Delta:         ${sig.netDelta}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name:   "\u{1F4CB} Top Dark Pool Prints",
-        value:  `\`\`\`\n${sig.topPrints || "Sin prints destacados"}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name:   "\u{26A0}\u{FE0F} Se\u00F1al Contraria",
-        value:  "> Cuando el precio baja PERO el Dark Pool muestra compra agresiva (ABOVE VWAP, blocks grandes), las instituciones est\u00E1n acumulando en el dip. Es una de las se\u00F1ales contrarias m\u00E1s fiables.",
-        inline: false,
-      },
-    ],
+    title:       `⚡ Option Flow Intent — ${time}`,
+    color:       0x7B61FF,
+    description: lines.join("\n"),
     footer: {
-      text: `OptionFlow Agent  \u2022  ${new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false })} ET`,
+      text: `OptionFlow  •  ${time}`,
     },
     timestamp: new Date().toISOString(),
   };
 
-  // Send to #se\u00F1ales-generales
-  await postToDiscord(WEBHOOKS.signals, { embeds: [embed] });
+  if (false) await postToDiscord(WEBHOOKS.signals, { embeds: [embed] });
 
-  // Also send to #alertas-criticas since this is high-value contrarian signal
   const critEmbed = {
     ...embed,
-    title: `\u{1F6A8} ACUMULACI\u00D3N INSTITUCIONAL \u2014 ${sig.ticker}  |  Dark Pool Divergencia`,
-    color: 0x7B61FF,
+    title: `🚨 ACUMULACIÓN INSTITUCIONAL — $${sig.ticker}  |  Dark Pool Divergencia`,
   };
-  await postToDiscord(WEBHOOKS.critical, {
-    content: `@here \u2014 **\u{1F3E6} Dark Pool muestra acumulaci\u00F3n agresiva en ${sig.ticker} mientras el precio cae ${sig.changePercent.toFixed(2)}%**`,
+  if (false) await postToDiscord(WEBHOOKS.critical, {
+    content: `@here — **🏦 Dark Pool: acumulación agresiva en $${sig.ticker} mientras el precio cae ${pctStr}**`,
     embeds: [critEmbed],
   });
 }
@@ -262,7 +306,7 @@ export async function sendNewsAlert(news: {
     footer:    { text: `OptionFlow Agent  •  ${new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false })} ET` },
     timestamp: new Date().toISOString(),
   };
-  await postToDiscord(WEBHOOKS.macro, { embeds: [embed] });
+  if (false) await postToDiscord(WEBHOOKS.macro, { embeds: [embed] });
 }
 
 // ── Flow Intelligence Signal to Discord ──────────────────────────────────────
@@ -289,83 +333,60 @@ export interface FlowIntelSignal {
   timestamp:      string;
 }
 
-export async function sendFlowIntelSignal(sig: FlowIntelSignal): Promise<void> {
-  const sessionBadge = sig.session === "MERCADO" ? "\u{1F514} MERCADO ABIERTO" :
-                       sig.session === "PRE-MARKET" ? "\u{1F305} PRE-MARKET" :
-                       sig.session === "POST-MARKET" ? "\u{1F319} POST-MARKET" : "\u{1F4A4} CERRADO";
+export async function sendFlowIntelSignal(sig: FlowIntelSignal & { contractRec?: string; technicals?: any }): Promise<void> {
+  const time       = nyTime();
+  const setupEmoji = sig.setup === "Long" ? "⬆️" : sig.setup === "Short" ? "⬇️" : "⛔";
+  const color      = sig.setup === "Long" ? 0x00C9A7 : sig.setup === "Short" ? 0xFF4444 : 0x888888;
 
-  const biasEmoji = sig.bias.includes("Alcista") ? "\u{1F7E2}" :
-                    sig.bias.includes("Bajista") ? "\u{1F534}" : "\u{26AA}";
-  const setupEmoji = sig.setup === "Long" ? "\u{2B06}\u{FE0F}" :
-                     sig.setup === "Short" ? "\u{2B07}\u{FE0F}" : "\u{26D4}";
-  const confEmoji = sig.confidence === "Alta" ? "\u{1F525}" :
-                    sig.confidence === "Media" ? "\u{26A0}\u{FE0F}" : "\u{2744}\u{FE0F}";
+  // ── Try to generate card image ─────────────────────────────────────────
+  let imgBuffer: Buffer | null = null;
+  try {
+    imgBuffer = await generateSignalImage(sig);
+  } catch (err: any) {
+    console.error("[discord] Screenshot failed, falling back to text embed:", err.message?.substring(0, 100));
+  }
 
-  const color = sig.setup === "Long" ? 0x00FF88 :
-                sig.setup === "Short" ? 0xFF4444 : 0x888888;
+  if (imgBuffer) {
+    // ── Send image card ─────────────────────────────────────────────────
+    const embed = {
+      color,
+      image: { url: "attachment://signal.png" },
+      footer: { text: `OptionFlow • ${time} • No es asesoría financiera` },
+      timestamp: new Date().toISOString(),
+    };
+    try {
+      await postImageToDiscord(WEBHOOKS.flowIntel, imgBuffer, { embeds: [embed] });
+    } catch (err: any) {
+      console.error("[discord] Image upload failed:", err.message?.substring(0, 100));
+      // Fall through to text fallback below
+      imgBuffer = null;
+    }
+  }
 
-  const embed = {
-    title: `\u{1F9E0} FLOW INTELLIGENCE \u2014 ${sig.symbol}  |  ${setupEmoji} ${sig.setup.toUpperCase()}`,
-    color,
-    description: `**${sessionBadge}**\n\n${sig.reasoning}`,
-    fields: [
-      {
-        name: "\u{1F4CA} Market Mode",
-        value: `\`\`\`\n${sig.marketMode}\n\`\`\``,
-        inline: true,
-      },
-      {
-        name: `${biasEmoji} Bias`,
-        value: `\`\`\`\n${sig.bias}\n\`\`\``,
-        inline: true,
-      },
-      {
-        name: `${confEmoji} Confianza`,
-        value: `\`\`\`\n${sig.confidence}\n\`\`\``,
-        inline: true,
-      },
-      {
-        name: "\u{1F4CD} Niveles Clave",
-        value: `\`\`\`\nGamma Flip: ${sig.keyLevels.gammaFlip}\nCall Wall:  ${sig.keyLevels.callWall}\nPut Wall:   ${sig.keyLevels.putWall}\nMax Pain:   ${sig.keyLevels.maxPain}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name: `${setupEmoji} Setup`,
-        value: `\`\`\`\nEntrada:     ${sig.entry}\nStop Loss:   ${sig.stopLoss}\nTake Profit: ${sig.takeProfit}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name: "\u{2705} Confirmaciones",
-        value: sig.confirmations.map(c => `> \u{2022} ${c}`).join("\n") || "> Sin confirmaciones",
-        inline: false,
-      },
-      {
-        name: "\u{1F4C8} Flujo Institucional",
-        value: `\`\`\`\n${sig.flowSummary}\n\`\`\``,
-        inline: false,
-      },
-      {
-        name: "\u{1F4A7} Liquidez",
-        value: `\`\`\`\n${sig.liquiditySummary}\n\`\`\``,
-        inline: false,
-      },
-    ],
-    footer: {
-      text: `OptionFlow Agent  \u2022  ${new Date().toLocaleString("en-US", { timeZone: "America/New_York", hour12: false })} ET  \u2022  No es asesor\u00EDa financiera`,
-    },
-    timestamp: new Date().toISOString(),
-  };
-
-  // Send to #flow-intelligence
-  await postToDiscord(WEBHOOKS.flowIntel, { embeds: [embed] });
-
-  // If HIGH confidence and actionable (Long/Short), also send to #alertas-criticas
-  if (sig.confidence === "Alta" && sig.setup !== "No Trade") {
-    const critEmbed = { ...embed, title: `\u{1F6A8} FLOW INTEL HIGH CONF \u2014 ${sig.symbol}  |  ${setupEmoji} ${sig.setup.toUpperCase()}` };
-    await postToDiscord(WEBHOOKS.critical, {
-      content: `@here \u2014 **\u{1F9E0} Flow Intelligence: ${sig.symbol} ${sig.setup.toUpperCase()} con confianza ALTA**`,
-      embeds: [critEmbed],
-    });
+  if (!imgBuffer) {
+    // ── Fallback: text embed ────────────────────────────────────────────
+    const confLines = sig.confirmations.slice(0, 3).map(c => `• ${c}`).join("\n");
+    const lines: string[] = [
+      `${sig.session}  •  ${time}`,
+      "",
+      `**$${sig.symbol}** — ${sig.marketMode}`,
+      `Confidence: **${sig.confidence}**`,
+      "",
+      `${setupEmoji} **Setup: ${sig.setup.toUpperCase()}**`,
+      `\`Entry: ${sig.entry}  •  SL: ${sig.stopLoss}  •  TP: ${sig.takeProfit}\``,
+      "",
+      `📍 GF ${sig.keyLevels.gammaFlip}  •  Call Wall ${sig.keyLevels.callWall}  •  Put Wall ${sig.keyLevels.putWall}`,
+      "",
+      confLines,
+    ];
+    const embed = {
+      title: `⚡ Flow Intel — ${time}`,
+      color,
+      description: lines.join("\n"),
+      footer: { text: `OptionFlow • ${time} • No es asesoría financiera` },
+      timestamp: new Date().toISOString(),
+    };
+    await postToDiscord(WEBHOOKS.flowIntel, { embeds: [embed] });
   }
 }
 
